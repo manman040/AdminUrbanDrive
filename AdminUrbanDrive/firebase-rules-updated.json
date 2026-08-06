@@ -1,0 +1,211 @@
+{
+  "rules": {
+    "users": {
+      ".read": true,
+      ".indexOn": ["email"],
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    },
+    "drivers": {
+      ".read": true,
+      ".write": true,
+      ".indexOn": ["email"],
+      "$driverId": {
+        ".read": "auth != null && auth.uid === $driverId",
+        "currentLocation": {
+          ".write": "auth != null && auth.uid === $driverId || true"
+        },
+        ".write": "auth != null && auth.uid === $driverId || true"
+      }
+    },
+    "driverApplications": {
+      ".read": true,
+      ".write": true,
+      "$appId": {
+        ".read": true,
+        ".write": true
+      }
+    },
+    "driver_applications": {
+      ".read": true,
+      ".write": true,
+      "$appId": {
+        ".read": true,
+        ".write": true
+      }
+    },
+    "applications": {
+      ".read": true,
+      ".write": true,
+      "$appId": {
+        ".read": true,
+        ".write": true
+      }
+    },
+    "commission_payments": {
+      ".read": true,
+      ".write": true
+    },
+    "bill_mappings": {
+      ".read": true,
+      ".write": true
+    },
+    "driver_commissions": {
+      ".read": true,
+      ".write": true,
+      "$driverId": {
+        ".read": "auth != null && auth.uid === $driverId",
+        ".write": "auth != null && auth.uid === $driverId || true"
+      }
+    },
+    "commissions": {
+      ".read": true,
+      ".write": true
+    },
+    "driver_approvals": {
+      ".read": true,
+      ".write": true,
+      ".indexOn": ["status"],
+      "$driverId": {
+        ".read": true,
+        ".write": true,
+        "status": {
+          ".write": "auth != null && ((auth.uid === $driverId && ((!data.exists() && newData.val() === 'pending') || (data.exists() && data.child('status').val() === 'rejected' && newData.val() === 'pending'))) || root.child('users').child(auth.uid).child('userType').val() === 'admin') || true"
+        },
+        "rejectionReason": {
+          ".write": "auth != null && root.child('users').child(auth.uid).child('userType').val() === 'admin' || true"
+        },
+        "rejectionMessage": {
+          ".write": "auth != null && root.child('users').child(auth.uid).child('userType').val() === 'admin' || true"
+        },
+        "adminNotes": {
+          ".write": "auth != null && root.child('users').child(auth.uid).child('userType').val() === 'admin' || true"
+        },
+        "reviewedBy": {
+          ".write": "auth != null && root.child('users').child(auth.uid).child('userType').val() === 'admin' || true"
+        },
+        "reviewedAt": {
+          ".write": "auth != null && root.child('users').child(auth.uid).child('userType').val() === 'admin' || true"
+        },
+        "idCardRejected": {
+          ".write": "auth != null && ((auth.uid === $driverId && (newData.val() === false || newData.val() === null)) || root.child('users').child(auth.uid).child('userType').val() === 'admin') || true"
+        },
+        "licenseRejected": {
+          ".write": "auth != null && ((auth.uid === $driverId && (newData.val() === false || newData.val() === null)) || root.child('users').child(auth.uid).child('userType').val() === 'admin') || true"
+        },
+        "carGrantRejected": {
+          ".write": "auth != null && ((auth.uid === $driverId && (newData.val() === false || newData.val() === null)) || root.child('users').child(auth.uid).child('userType').val() === 'admin') || true"
+        },
+        "carImageRejected": {
+          ".write": "auth != null && ((auth.uid === $driverId && (newData.val() === false || newData.val() === null)) || root.child('users').child(auth.uid).child('userType').val() === 'admin') || true"
+        },
+        "icPhotoFrontPath": {
+          ".write": "auth != null && auth.uid === $driverId"
+        },
+        "icPhotoBackPath": {
+          ".write": "auth != null && auth.uid === $driverId"
+        },
+        "licensePhotoFrontPath": {
+          ".write": "auth != null && auth.uid === $driverId"
+        },
+        "licensePhotoBackPath": {
+          ".write": "auth != null && auth.uid === $driverId"
+        },
+        "grantPhotoPath": {
+          ".write": "auth != null && auth.uid === $driverId"
+        },
+        "carPhotoPath": {
+          ".write": "auth != null && auth.uid === $driverId"
+        },
+        "profilePicturePath": {
+          ".write": "auth != null && auth.uid === $driverId"
+        }
+      }
+    },
+    "bookings": {
+      ".read": true,
+      "$bookingId": {
+        ".read": "auth != null",
+        "driverLocation": {
+          ".write": "auth != null"
+        },
+        "status": {
+          ".write": "auth != null && (root.child('bookings').child($bookingId).child('userId').val() === auth.uid || !root.child('bookings').child($bookingId).child('driverId').exists() || root.child('bookings').child($bookingId).child('driverId').val() === null || root.child('bookings').child($bookingId).child('driverId').val() === '' || root.child('bookings').child($bookingId).child('driverId').val() === auth.uid)"
+        },
+        "driverId": {
+          ".write": "auth != null && (newData.val() === auth.uid && (!root.child('bookings').child($bookingId).child('driverId').exists() || root.child('bookings').child($bookingId).child('driverId').val() === null || root.child('bookings').child($bookingId).child('driverId').val() === '')) || root.child('bookings').child($bookingId).child('driverId').val() === auth.uid || root.child('bookings').child($bookingId).child('userId').val() === auth.uid"
+        },
+        "rated": {
+          ".write": "auth != null && root.child('bookings').child($bookingId).child('userId').val() === auth.uid"
+        },
+        "ratingTimestamp": {
+          ".write": "auth != null && root.child('bookings').child($bookingId).child('userId').val() === auth.uid"
+        },
+        ".write": "auth != null && ((newData.exists() && newData.child('userId').val() === auth.uid) || (newData.exists() && newData.child('driverId').val() === auth.uid) || (data.exists() && (data.child('userId').val() === auth.uid || data.child('driverId').val() === auth.uid || !data.child('driverId').exists() || data.child('driverId').val() === null || data.child('driverId').val() === '')))"
+      }
+    },
+    "ratings": {
+      ".read": true,
+      "$driverId": {
+        ".read": "auth != null",
+        "$ratingId": {
+          ".read": "auth != null",
+          ".write": "auth != null"
+        }
+      }
+    },
+    "commission_payment": {
+      ".read": true,
+      ".write": true,
+      "$driverId": {
+        ".read": true,
+        ".write": true,
+        "$paymentId": {
+          ".read": true,
+          ".write": true
+        }
+      }
+    },
+    "driver_settings": {
+      ".read": true,
+      ".write": true,
+      "$driverId": {
+        ".read": true,
+        ".write": true
+      }
+    },
+    "driver_notifications": {
+      ".read": true,
+      ".write": true,
+      "$driverId": {
+        ".read": true,
+        ".write": true,
+        "$notificationId": {
+          ".read": true,
+          ".write": true
+        }
+      }
+    },
+    "password_reset_otps": {
+      ".read": true,
+      ".write": true,
+      "$emailKey": {
+        ".read": true,
+        ".write": true
+      }
+    },
+    "ride_chats": {
+      "$bookingId": {
+        ".read": "auth != null && (root.child('bookings').child($bookingId).child('userId').val() === auth.uid || root.child('bookings').child($bookingId).child('driverId').val() === auth.uid)",
+        "$messageId": {
+          ".read": "auth != null && (root.child('bookings').child($bookingId).child('userId').val() === auth.uid || root.child('bookings').child($bookingId).child('driverId').val() === auth.uid)",
+          ".write": "auth != null && (root.child('bookings').child($bookingId).child('userId').val() === auth.uid || root.child('bookings').child($bookingId).child('driverId').val() === auth.uid) && newData.child('senderId').val() === auth.uid"
+        }
+      }
+    },
+    ".read": false,
+    ".write": false
+  }
+}

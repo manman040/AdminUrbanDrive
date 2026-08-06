@@ -1,0 +1,111 @@
+{
+  "rules": {
+    "users": {
+      ".read": true,
+      ".indexOn": ["email"],
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    },
+    "drivers": {
+      ".read": true,
+      ".write": true,
+      ".indexOn": ["email"],
+      "$driverId": {
+        ".read": "auth != null && auth.uid === $driverId",
+        "currentLocation": {
+          ".write": "auth != null && auth.uid === $driverId || true"
+        },
+        ".write": "auth != null && auth.uid === $driverId || true"
+      }
+    },
+    "commission_payments": {
+      ".read": "auth != null",
+      ".write": true
+    },
+    "bill_mappings": {
+      ".read": "auth != null",
+      ".write": true
+    },
+    "driver_commissions": {
+      ".read": true,
+      ".write": true,
+      "$driverId": {
+        ".read": "auth != null && auth.uid === $driverId",
+        ".write": "auth != null && auth.uid === $driverId || true"
+      }
+    },
+    "commissions": {
+      ".read": "auth != null",
+      ".write": true
+    },
+    "driver_approvals": {
+      ".read": true,
+      ".write": true,
+      "$driverId": {
+        ".read": "auth != null && auth.uid === $driverId",
+        ".write": "auth != null && auth.uid === $driverId || true"
+      }
+    },
+    "bookings": {
+      ".read": true,
+      "$bookingId": {
+        ".read": "auth != null",
+        "driverLocation": {
+          ".write": "auth != null"
+        },
+        "status": {
+          ".write": "auth != null && (root.child('bookings').child($bookingId).child('userId').val() === auth.uid || !root.child('bookings').child($bookingId).child('driverId').exists() || root.child('bookings').child($bookingId).child('driverId').val() === null || root.child('bookings').child($bookingId).child('driverId').val() === '' || root.child('bookings').child($bookingId).child('driverId').val() === auth.uid)"
+        },
+        "driverId": {
+          ".write": "auth != null && (newData.val() === auth.uid && (!root.child('bookings').child($bookingId).child('driverId').exists() || root.child('bookings').child($bookingId).child('driverId').val() === null || root.child('bookings').child($bookingId).child('driverId').val() === '')) || root.child('bookings').child($bookingId).child('driverId').val() === auth.uid || root.child('bookings').child($bookingId).child('userId').val() === auth.uid"
+        },
+        "rated": {
+          ".write": "auth != null && root.child('bookings').child($bookingId).child('userId').val() === auth.uid"
+        },
+        "ratingTimestamp": {
+          ".write": "auth != null && root.child('bookings').child($bookingId).child('userId').val() === auth.uid"
+        },
+        ".write": "auth != null && ((newData.exists() && newData.child('userId').val() === auth.uid) || (newData.exists() && newData.child('driverId').val() === auth.uid) || (data.exists() && (data.child('userId').val() === auth.uid || data.child('driverId').val() === auth.uid || !data.child('driverId').exists() || data.child('driverId').val() === null || data.child('driverId').val() === '')))"
+      }
+    },
+    "ratings": {
+      ".read": true,
+      "$driverId": {
+        ".read": "auth != null",
+        "$ratingId": {
+          ".read": "auth != null",
+          ".write": "auth != null"
+        }
+      }
+    },
+    "commission_payment": {
+      ".read": "auth != null",
+      ".write": true,
+      "$driverId": {
+        ".read": "auth != null && auth.uid === $driverId",
+        ".write": true
+      }
+    },
+    "driver_settings": {
+      ".read": "auth != null",
+      ".write": true,
+      "$driverId": {
+        ".read": "auth != null && auth.uid === $driverId || true",
+        ".write": true
+      }
+    },
+    "password_reset_otps": {
+      ".read": true,
+      ".write": true,
+      "$emailKey": {
+        ".read": true,
+        ".write": true
+      }
+    },
+    ".read": false,
+    ".write": false
+  }
+}
+
