@@ -130,20 +130,22 @@ function authenticateWithFirebase($email, $password) {
         'http' => [
             'header' => "Content-type: application/json\r\n",
             'method' => 'POST',
-            'content' => json_encode($data)
+            'content' => json_encode($data),
+            'timeout' => 10,
+            'ignore_errors' => true // don't warn/abort on Firebase's 400 response for bad credentials -- we read the body ourselves below
         ]
     ];
-    
+
     $context = stream_context_create($options);
-    $result = file_get_contents($url, false, $context);
-    
+    $result = @file_get_contents($url, false, $context);
+
     if ($result === FALSE) {
         error_log('Firebase authentication failed: Unable to connect to Firebase Auth API');
         return false;
     }
-    
+
     $response = json_decode($result, true);
-    
+
     if (isset($response['idToken'])) {
         // Store the token in session for future use
         $_SESSION['firebase_token'] = $response['idToken'];
