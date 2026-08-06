@@ -1,0 +1,20 @@
+.git
+.firebase
+.firebaserc
+firebase.json
+firebase-debug.log
+firebase-rules-URGENT-FIX.json
+firebase-rules-final.json
+firebase-rules-updated.json
+Docs
+debug
+tests
+scripts
+other file
+node_modules
+index.js
+package.json
+package-lock.json
+.env
+Dockerfile
+.dockerignore

@@ -4,8 +4,8 @@ require_once 'firebase-config.php';
 
 // Simple authentication - in production, you should use Firebase Auth or proper authentication
 $admin_credentials = [
-    'admin' => 'admin123',
-    'admin@PerdaRide.com' => 'admin123'
+    'admin' => 'CY2eaYfjZX9YBxqTO7md',
+    'admin@PerdaRide.com' => 'CY2eaYfjZX9YBxqTO7md'
 ];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
