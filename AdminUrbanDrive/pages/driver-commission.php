@@ -171,7 +171,7 @@ if (is_array($driverCommissionsData)) {
 		foreach ($recentJobs as $jobKey => $job) {
 			$jobDate = 0;
 			if (isset($job['job_date'])) {
-				$jobDate = is_numeric($job['job_date']) ? $jobDate : strtotime($job['job_date']);
+				$jobDate = is_numeric($job['job_date']) ? $job['job_date'] : strtotime($job['job_date']);
 			} elseif (isset($job['completed_at'])) {
 				$completedAt = $job['completed_at'];
 				if (is_array($completedAt)) {

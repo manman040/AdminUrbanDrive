@@ -35,13 +35,17 @@ try {
         $daily_rides[$day] = 0;
     }
     
-    // Calculate pie chart data from actual bookings
+    // Calculate pie chart data from actual bookings.
+    // Statuses match the app's actual ride lifecycle (pending -> accepted ->
+    // arrived_pickup -> in_progress -> completed, or cancelled at any point)
+    // -- the app never writes 'confirmed' or 'rejected' to a booking.
     $status_counts = [
-        'completed' => 0,
-        'confirmed' => 0,
         'pending' => 0,
-        'cancelled' => 0,
-        'rejected' => 0
+        'accepted' => 0,
+        'arrived_pickup' => 0,
+        'in_progress' => 0,
+        'completed' => 0,
+        'cancelled' => 0
     ];
     
     $total_amount = 0;
@@ -450,8 +454,10 @@ foreach ($usersDataRaw as $userId => $userData) {
         }
 
         .status-badge { padding:6px 14px; border-radius:20px; font-size:12px; font-weight:600; display:inline-flex; align-items:center; gap:6px; box-shadow:0 2px 4px rgba(0,0,0,0.1); }
-        .status-confirmed { background:linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); color:#065f46; border:1px solid #10b981; }
+        .status-confirmed, .status-accepted { background:linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); color:#065f46; border:1px solid #10b981; }
         .status-pending { background:linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); color:#92400e; border:1px solid #f59e0b; }
+        .status-arrived_pickup { background:linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%); color:#5b21b6; border:1px solid #8b5cf6; }
+        .status-in_progress { background:linear-gradient(135deg, #ccfbf1 0%, #99f6e4 100%); color:#115e59; border:1px solid #14b8a6; }
         .status-completed { background:linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%); color:#1e40af; border:1px solid #3b82f6; }
         .status-cancelled { background:linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); color:#991b1b; border:1px solid #ef4444; }
 
@@ -1008,11 +1014,12 @@ foreach ($usersDataRaw as $userId => $userData) {
                                     <?php
                                     $current_angle = 0;
                                     $colors = [
-                                        'completed' => '#2ecc71',
-                                        'confirmed' => '#3498db', 
                                         'pending' => '#f39c12',
-                                        'cancelled' => '#e74c3c',
-                                        'rejected' => '#95a5a6'
+                                        'accepted' => '#3498db',
+                                        'arrived_pickup' => '#9b59b6',
+                                        'in_progress' => '#1abc9c',
+                                        'completed' => '#2ecc71',
+                                        'cancelled' => '#e74c3c'
                                     ];
                                     
                                     foreach ($status_percentages as $status => $percentage):
@@ -1042,7 +1049,7 @@ foreach ($usersDataRaw as $userId => $userData) {
                                 <div class="legend-item">
                                     <div class="legend-color" style="background: <?php echo $colors[$status]; ?>;"></div>
                                     <div class="legend-text">
-                                        <span class="legend-label"><?php echo ucfirst($status); ?></span>
+                                        <span class="legend-label"><?php echo ucwords(str_replace('_', ' ', $status)); ?></span>
                                         <span class="legend-count"><?php echo $count; ?> (<?php echo $status_percentages[$status]; ?>%)</span>
                                     </div>
                                 </div>
@@ -1118,11 +1125,11 @@ foreach ($usersDataRaw as $userId => $userData) {
                                 <td><?php echo 'RM ' . htmlspecialchars(number_format(bookingFareAmount($booking), 2)); ?></td>
                                 <td>
                                     <span class="status-badge status-<?php echo strtolower($booking['status'] ?? 'pending'); ?>">
-                                        <?php echo ucfirst($booking['status'] ?? 'pending'); ?>
+                                        <?php echo ucwords(str_replace('_', ' ', $booking['status'] ?? 'pending')); ?>
                                     </span>
                                 </td>
                                 <td>
-                                    <?php 
+                                    <?php
                                     if (isset($booking['createdAt'])) {
                                         echo date('M d, Y H:i', firebaseTimestampToSeconds($booking['createdAt']));
                                     } else {
@@ -1134,7 +1141,7 @@ foreach ($usersDataRaw as $userId => $userData) {
                                     <button class="action-btn view-btn" onclick="viewBooking('<?php echo $bookingId; ?>')">
                                         <i class="fas fa-eye"></i>
                                     </button>
-                                    <?php if (strtolower($booking['status'] ?? '') === 'confirmed'): ?>
+                                    <?php if (strtolower($booking['status'] ?? '') === 'in_progress'): ?>
                                         <button class="action-btn complete-btn" onclick="completeBooking('<?php echo $bookingId; ?>')">
                                             <i class="fas fa-check"></i>
                                         </button>

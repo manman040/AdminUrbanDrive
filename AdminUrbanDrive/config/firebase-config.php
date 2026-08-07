@@ -257,9 +257,9 @@ function setFirebaseData($path, $data) {
             'ignore_errors' => true
         ]
     ];
-    
+
     $context = stream_context_create($options);
-    $result = file_get_contents($url, false, $context);
+    $result = @file_get_contents($url, false, $context);
     return $result !== FALSE;
 }
 
@@ -282,9 +282,9 @@ function updateFirebaseData($path, $data) {
             'ignore_errors' => true
         ]
     ];
-    
+
     $context = stream_context_create($options);
-    $result = file_get_contents($url, false, $context);
+    $result = @file_get_contents($url, false, $context);
     return $result !== FALSE;
 }
 
@@ -305,9 +305,9 @@ function deleteFirebaseData($path) {
             'ignore_errors' => true
         ]
     ];
-    
+
     $context = stream_context_create($options);
-    $result = file_get_contents($url, false, $context);
+    $result = @file_get_contents($url, false, $context);
     return $result !== FALSE;
 }
 
@@ -561,9 +561,9 @@ function updateDriverCommission($driverId, $bookingId, $fareAmount, $commissionA
             ]
         ]);
         
-        $result = file_get_contents($url, false, $context);
+        $result = @file_get_contents($url, false, $context);
         return $result !== false;
-        
+
     } catch (Exception $e) {
         error_log("Error updating driver commission: " . $e->getMessage());
         return false;
