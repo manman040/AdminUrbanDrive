@@ -845,8 +845,23 @@ function extractImagePathsFromApplication($app, $docType) {
     
     // First, try specific field names (most common cases)
     $fieldVariations = [];
-    
-    if ($docType === 'idCard') {
+
+    if ($docType === 'profilePicture') {
+        $fieldVariations = [
+            // Common top-level fields used by the mobile app
+            'profilePicturePath',
+            // Common nested fields used by the mobile app
+            ['documents', 'profilePicturePath'],
+            // Nested in documents object
+            ['documents', 'profilePictureUrl'], ['documents', 'profile_picture_url'],
+            ['documents', 'profilePicturePath'], ['documents', 'profile_picture_path'],
+            ['documents', 'profilePictureImage'], ['documents', 'profile_picture_image'],
+            ['documents', 'profilePicture'], ['documents', 'profile_picture'],
+            // Top level
+            'profilePictureUrl', 'profile_picture_url', 'profilePicturePath', 'profile_picture_path',
+            'profilePictureImage', 'profile_picture_image', 'profilePicture', 'profile_picture'
+        ];
+    } elseif ($docType === 'idCard') {
         $fieldVariations = [
             // Common top-level fields used by the mobile app
             'icPhotoFrontPath', 'icPhotoBackPath', 'icPhotoPath',
@@ -967,7 +982,9 @@ function extractImagePathsFromApplication($app, $docType) {
         
         // Filter fields based on document type keywords
         $keywords = [];
-        if ($docType === 'idCard') {
+        if ($docType === 'profilePicture') {
+            $keywords = ['profilepicture', 'profile_picture', 'profilephoto', 'profile_photo'];
+        } elseif ($docType === 'idCard') {
             $keywords = ['idcard', 'id_card', 'ic'];
         } elseif ($docType === 'license') {
             $keywords = ['license', 'driving'];

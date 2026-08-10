@@ -1692,6 +1692,25 @@ try {
                                 <div class="detail-row"><label>Capacity:</label><span><i class="fas fa-user"></i> <?php echo htmlspecialchars($app['passengerCapacity'] ?? '') ?: 'N/A'; ?></span></div>
                             </div>
                             <div class="detail-block">
+                                <h4>Profile Picture</h4>
+                                <?php
+                                $profilePicturePaths = extractImagePathsFromApplication($app, 'profilePicture');
+                                $profilePictureUrls = [];
+                                foreach ($profilePicturePaths as $path) {
+                                    $url = getImageUrl($path);
+                                    if ($url) {
+                                        $profilePictureUrls[] = $url;
+                                    }
+                                }
+                                if (!empty($profilePictureUrls)): ?>
+                                    <button class="action-btn view-btn" onclick="viewImageFromData(['<?php echo implode("', '", array_map('htmlspecialchars', $profilePictureUrls)); ?>'], 'Profile Picture - <?php echo $driverName; ?>', '<?php echo htmlspecialchars($idCardNumber); ?>', 'profilePicture')">
+                                        <i class="fas fa-eye"></i> View
+                                    </button>
+                                <?php else: ?>
+                                    <span style="color: #999;">N/A</span>
+                                <?php endif; ?>
+                            </div>
+                            <div class="detail-block">
                                 <h4>ID Card</h4>
                                 <?php
 
@@ -2009,7 +2028,7 @@ try {
                                     </div>
                                     <?php if (!empty($carImageUrls)): ?>
                                         <button class="action-btn view-btn" onclick="viewImageFromData(['<?php echo implode("', '", array_map('htmlspecialchars', $carImageUrls)); ?>'], 'Car Image - <?php echo $driverName; ?>', '<?php echo htmlspecialchars($idCardNumber); ?>', 'carImage')">
-                                            <i class="fas fa-image"></i> View
+                                            <i class="fas fa-eye"></i> View
                                         </button>
                                     <?php else: ?>
                                         <span style="color: #999;">Awaiting new upload</span>
@@ -2021,7 +2040,7 @@ try {
                                     </div>
                                 <?php elseif (!empty($carImageUrls)): ?>
                                     <button class="action-btn view-btn" onclick="viewImageFromData(['<?php echo implode("', '", array_map('htmlspecialchars', $carImageUrls)); ?>'], 'Car Image - <?php echo $driverName; ?>', '<?php echo htmlspecialchars($idCardNumber); ?>', 'carImage')">
-                                        <i class="fas fa-image"></i> View
+                                        <i class="fas fa-eye"></i> View
                                     </button>
                                 <?php else: ?>
                                     <span style="color: #999;">N/A</span>
