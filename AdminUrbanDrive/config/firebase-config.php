@@ -350,6 +350,58 @@ function updateBookingStatus($bookingId, $status) {
     return updateFirebaseData('bookings/' . $bookingId, ['status' => $status]);
 }
 
+// The two ride categories the app offers. Kept here as the single source of
+// truth for defaults so the admin page and the save handler can't drift out
+// of sync with each other.
+function fareSettingsDefaults() {
+    return [
+        'categoryA' => ['baseFare' => 2.00, 'perKm' => 1.20, 'bookingFee' => 1.00],
+        'categoryB' => ['baseFare' => 3.00, 'perKm' => 1.50, 'bookingFee' => 1.00],
+    ];
+}
+
+// Function to get fare settings for both ride categories, filling in the
+// documented defaults for whichever category hasn't been saved yet (e.g. a
+// fresh install where the admin hasn't opened Fare Settings before).
+function getFareSettings() {
+    $stored = getFirebaseData('fareSettings');
+    if (!is_array($stored)) {
+        $stored = [];
+    }
+
+    $settings = [];
+    foreach (fareSettingsDefaults() as $category => $defaults) {
+        $categoryData = isset($stored[$category]) && is_array($stored[$category])
+            ? $stored[$category]
+            : [];
+        $settings[$category] = [
+            'baseFare' => isset($categoryData['baseFare']) && is_numeric($categoryData['baseFare'])
+                ? (float) $categoryData['baseFare']
+                : $defaults['baseFare'],
+            'perKm' => isset($categoryData['perKm']) && is_numeric($categoryData['perKm'])
+                ? (float) $categoryData['perKm']
+                : $defaults['perKm'],
+            'bookingFee' => isset($categoryData['bookingFee']) && is_numeric($categoryData['bookingFee'])
+                ? (float) $categoryData['bookingFee']
+                : $defaults['bookingFee'],
+        ];
+    }
+
+    return $settings;
+}
+
+// Function to save fare settings for one ride category. Caller is
+// responsible for validating $category against fareSettingsDefaults() and
+// the amounts before calling this.
+function saveFareSettings($category, $baseFare, $perKm, $bookingFee) {
+    return setFirebaseData('fareSettings/' . $category, [
+        'baseFare' => $baseFare,
+        'perKm' => $perKm,
+        'bookingFee' => $bookingFee,
+        'updatedAt' => time() * 1000,
+    ]);
+}
+
 // Function to get average rating from customer feedback
 function getAverageRatingFromFeedback() {
     try {

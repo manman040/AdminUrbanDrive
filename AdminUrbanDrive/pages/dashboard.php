@@ -943,6 +943,10 @@ foreach ($usersDataRaw as $userId => $userData) {
                 <i class="fas fa-dollar-sign"></i>
                 Driver Commission
             </a>
+            <a href="fare-settings.php" class="nav-item">
+                <i class="fas fa-money-bill-wave"></i>
+                Fare Settings
+            </a>
             <a href="customer-feedback.php" class="nav-item">
                 <i class="fas fa-comments"></i>
                 Customer Feedback

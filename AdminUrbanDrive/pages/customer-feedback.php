@@ -443,6 +443,10 @@ function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 				<i class="fas fa-dollar-sign"></i>
 				Driver Commission
 			</a>
+			<a href="fare-settings.php" class="nav-item">
+				<i class="fas fa-money-bill-wave"></i>
+				Fare Settings
+			</a>
 			<a href="customer-feedback.php" class="nav-item active">
 				<i class="fas fa-comments"></i>
 				Customer Feedback
