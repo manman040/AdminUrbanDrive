@@ -27,7 +27,14 @@ try {
     if ($bookings === null || !is_array($bookings)) {
         $bookings = [];
     }
-    
+
+    // This page only manages finished trips -- pending/in-progress bookings
+    // are still live and cancelled ones never completed, so mixing them into
+    // the ride table and status breakdown here doesn't reflect real history.
+    $bookings = array_filter($bookings, function ($booking) {
+        return is_array($booking) && strtolower($booking['status'] ?? '') === 'completed';
+    });
+
     // Calculate daily bookings for charts
     $daily_rides = [];
     $days = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
@@ -1086,10 +1093,7 @@ foreach ($usersDataRaw as $userId => $userData) {
                         <div class="filter-group">
                             <select id="statusFilter">
                                 <option value="">All Status</option>
-                                <option value="confirmed">Confirmed</option>
-                                <option value="pending">Pending</option>
                                 <option value="completed">Completed</option>
-                                <option value="cancelled">Cancelled</option>
                             </select>
                             <select id="sortOrder">
                                 <option value="desc">Top to bottom (Newest first)</option>
