@@ -85,8 +85,13 @@ try {
                 $status_counts['pending']++; // Default to pending for unknown statuses
             }
             
-            // Total amount calculation
-            $total_amount += bookingFareAmount($booking);
+            // Total amount calculation -- only completed rides actually earned
+            // money; pending/cancelled bookings still carry an estimated fare
+            // but nothing was ever collected for them, so counting them here
+            // inflates the figure shown at the center of the pie chart.
+            if ($status === 'completed') {
+                $total_amount += bookingFareAmount($booking);
+            }
         }
     }
     
