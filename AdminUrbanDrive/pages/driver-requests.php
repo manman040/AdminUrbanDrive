@@ -591,6 +591,13 @@ try {
             border-bottom: none;
         }
 
+        .table-pager { display:flex; align-items:center; justify-content:center; gap:6px; padding:20px 0 4px; flex-wrap:wrap; }
+        .table-pager .page-btn { min-width:36px; height:36px; padding:0 10px; border:2px solid #e2e8f0; background:#fff; border-radius:8px; font-size:13px; font-weight:600; color:#475569; cursor:pointer; transition:all 0.2s ease; }
+        .table-pager .page-btn:hover:not(:disabled) { border-color:#ff6b35; color:#ff6b35; }
+        .table-pager .page-btn.active { background:#ff6b35; border-color:#ff6b35; color:#fff; }
+        .table-pager .page-btn:disabled { opacity:0.4; cursor:not-allowed; }
+        .table-pager .page-ellipsis { color:#94a3b8; padding:0 4px; }
+
         .status-badge {
             padding: 6px 14px;
             border-radius: 20px;
@@ -2087,6 +2094,7 @@ try {
                         <?php endif; ?>
                     </tbody>
                 </table>
+                <div class="table-pager" id="applicationsPager"></div>
             </div>
         </div>
     </div>
@@ -2219,7 +2227,74 @@ try {
         <?php if ($errorMessage): ?>
         console.error('Error loading applications:', <?php echo json_encode($errorMessage); ?>);
         <?php endif; ?>
-        
+
+        // Splits a table's rows into pages of `perPage` and renders numbered
+        // controls + prev/next arrows. Rows carrying data-filtered="hidden"
+        // (set by a status filter, search box, etc.) are excluded from the
+        // count so pagination and filtering compose instead of fighting over
+        // each row's display style.
+        function createTablePager(tbodySelector, pagerSelector, perPage) {
+            const tbody = document.querySelector(tbodySelector);
+            const pager = document.querySelector(pagerSelector);
+            if (!tbody || !pager) {
+                return { refresh: function () {} };
+            }
+
+            function refresh() {
+                const rows = Array.prototype.filter.call(tbody.children, function (row) {
+                    return row.tagName === 'TR' && row.dataset.filtered !== 'hidden';
+                });
+                const totalPages = Math.max(1, Math.ceil(rows.length / perPage));
+                let current = parseInt(pager.dataset.page || '1', 10);
+                if (current > totalPages) current = totalPages;
+                if (current < 1) current = 1;
+                pager.dataset.page = current;
+
+                rows.forEach(function (row, i) {
+                    row.style.display = (Math.floor(i / perPage) + 1 === current) ? '' : 'none';
+                });
+
+                renderControls(totalPages, current);
+            }
+
+            function renderControls(totalPages, current) {
+                if (totalPages <= 1) {
+                    pager.innerHTML = '';
+                    return;
+                }
+                let start = Math.max(1, current - 2);
+                let end = Math.min(totalPages, start + 4);
+                start = Math.max(1, end - 4);
+
+                let html = '<button type="button" class="page-btn" data-page="' + (current - 1) + '"' + (current === 1 ? ' disabled' : '') + '>&laquo;</button>';
+                if (start > 1) {
+                    html += '<button type="button" class="page-btn" data-page="1">1</button>';
+                    if (start > 2) html += '<span class="page-ellipsis">&hellip;</span>';
+                }
+                for (let p = start; p <= end; p++) {
+                    html += '<button type="button" class="page-btn' + (p === current ? ' active' : '') + '" data-page="' + p + '">' + p + '</button>';
+                }
+                if (end < totalPages) {
+                    if (end < totalPages - 1) html += '<span class="page-ellipsis">&hellip;</span>';
+                    html += '<button type="button" class="page-btn" data-page="' + totalPages + '">' + totalPages + '</button>';
+                }
+                html += '<button type="button" class="page-btn" data-page="' + (current + 1) + '"' + (current === totalPages ? ' disabled' : '') + '>&raquo;</button>';
+                pager.innerHTML = html;
+
+                pager.querySelectorAll('.page-btn:not([disabled])').forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        pager.dataset.page = this.dataset.page;
+                        refresh();
+                        tbody.closest('table').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    });
+                });
+            }
+
+            pager.dataset.page = '1';
+            refresh();
+            return { refresh: refresh };
+        }
+
         const rejectModalOverlay = document.getElementById('rejectModalOverlay');
         const rejectForm = document.getElementById('rejectForm');
         const rejectDocList = document.getElementById('rejectDocList');
@@ -2903,20 +2978,21 @@ try {
             }
         });
         // Add status filter functionality
+        const applicationsPager = createTablePager('.applications-table tbody', '#applicationsPager', 10);
         document.getElementById('statusFilter').addEventListener('change', function() {
             const status = this.value.toLowerCase();
             const rows = document.querySelectorAll('.applications-table tbody tr');
-            
+
             rows.forEach(row => {
                 const statusCell = row.querySelector('.status-badge');
                 if (!statusCell) {
-                    row.style.display = 'none';
+                    row.dataset.filtered = 'hidden';
                     return;
                 }
-                
+
                 const statusText = statusCell.textContent.toLowerCase();
                 let shouldShow = false;
-                
+
                 if (status === '') {
                     shouldShow = true;
                 } else if (status === 'waiting_for_resubmission') {
@@ -2925,9 +3001,11 @@ try {
                 } else {
                     shouldShow = statusText.includes(status);
                 }
-                
-                row.style.display = shouldShow ? '' : 'none';
+
+                row.dataset.filtered = shouldShow ? 'visible' : 'hidden';
             });
+            document.querySelector('#applicationsPager').dataset.page = '1';
+            applicationsPager.refresh();
         });
 
         function approveApplication(driverId, driverName) {

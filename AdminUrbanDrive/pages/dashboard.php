@@ -451,6 +451,13 @@ foreach ($usersDataRaw as $userId => $userData) {
         .bookings-table tr:hover { background:linear-gradient(90deg, #fff5f2 0%, #ffffff 100%); transform:scale(1.001); box-shadow:0 2px 8px rgba(255, 107, 53, 0.1); }
         .bookings-table tr:last-child td { border-bottom:none; }
 
+        .table-pager { display:flex; align-items:center; justify-content:center; gap:6px; padding:20px 0 4px; flex-wrap:wrap; }
+        .table-pager .page-btn { min-width:36px; height:36px; padding:0 10px; border:2px solid #e2e8f0; background:#fff; border-radius:8px; font-size:13px; font-weight:600; color:#475569; cursor:pointer; transition:all 0.2s ease; }
+        .table-pager .page-btn:hover:not(:disabled) { border-color:#ff6b35; color:#ff6b35; }
+        .table-pager .page-btn.active { background:#ff6b35; border-color:#ff6b35; color:#fff; }
+        .table-pager .page-btn:disabled { opacity:0.4; cursor:not-allowed; }
+        .table-pager .page-ellipsis { color:#94a3b8; padding:0 4px; }
+
         .location-info {
             max-width: 200px;
         }
@@ -1148,6 +1155,7 @@ foreach ($usersDataRaw as $userId => $userData) {
                             <?php endforeach; endif; ?>
                         </tbody>
                     </table>
+                    <div class="table-pager" id="bookingsPager"></div>
                 </div>
             </div>
         </div>
@@ -1174,6 +1182,73 @@ foreach ($usersDataRaw as $userId => $userData) {
         const DRIVER_PROFILES = <?php echo json_encode($driverProfiles, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?> || {};
         const USER_PROFILES = <?php echo json_encode($userProfiles, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?> || {};
         const COMMISSION_RATE = <?php echo json_encode($commissionRate); ?>;
+
+        // Splits a table's rows into pages of `perPage` and renders numbered
+        // controls + prev/next arrows. Rows carrying data-filtered="hidden"
+        // (set by a status filter, search box, etc.) are excluded from the
+        // count so pagination and filtering compose instead of fighting over
+        // each row's display style.
+        function createTablePager(tbodySelector, pagerSelector, perPage) {
+            const tbody = document.querySelector(tbodySelector);
+            const pager = document.querySelector(pagerSelector);
+            if (!tbody || !pager) {
+                return { refresh: function () {} };
+            }
+
+            function refresh() {
+                const rows = Array.prototype.filter.call(tbody.children, function (row) {
+                    return row.tagName === 'TR' && row.dataset.filtered !== 'hidden';
+                });
+                const totalPages = Math.max(1, Math.ceil(rows.length / perPage));
+                let current = parseInt(pager.dataset.page || '1', 10);
+                if (current > totalPages) current = totalPages;
+                if (current < 1) current = 1;
+                pager.dataset.page = current;
+
+                rows.forEach(function (row, i) {
+                    row.style.display = (Math.floor(i / perPage) + 1 === current) ? '' : 'none';
+                });
+
+                renderControls(totalPages, current);
+            }
+
+            function renderControls(totalPages, current) {
+                if (totalPages <= 1) {
+                    pager.innerHTML = '';
+                    return;
+                }
+                let start = Math.max(1, current - 2);
+                let end = Math.min(totalPages, start + 4);
+                start = Math.max(1, end - 4);
+
+                let html = '<button type="button" class="page-btn" data-page="' + (current - 1) + '"' + (current === 1 ? ' disabled' : '') + '>&laquo;</button>';
+                if (start > 1) {
+                    html += '<button type="button" class="page-btn" data-page="1">1</button>';
+                    if (start > 2) html += '<span class="page-ellipsis">&hellip;</span>';
+                }
+                for (let p = start; p <= end; p++) {
+                    html += '<button type="button" class="page-btn' + (p === current ? ' active' : '') + '" data-page="' + p + '">' + p + '</button>';
+                }
+                if (end < totalPages) {
+                    if (end < totalPages - 1) html += '<span class="page-ellipsis">&hellip;</span>';
+                    html += '<button type="button" class="page-btn" data-page="' + totalPages + '">' + totalPages + '</button>';
+                }
+                html += '<button type="button" class="page-btn" data-page="' + (current + 1) + '"' + (current === totalPages ? ' disabled' : '') + '>&raquo;</button>';
+                pager.innerHTML = html;
+
+                pager.querySelectorAll('.page-btn:not([disabled])').forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        pager.dataset.page = this.dataset.page;
+                        refresh();
+                        tbody.closest('table').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    });
+                });
+            }
+
+            pager.dataset.page = '1';
+            refresh();
+            return { refresh: refresh };
+        }
 
         const bookingModalOverlay = document.getElementById('bookingModalOverlay');
         const bookingModalBody = document.getElementById('bookingModalBody');
@@ -1217,6 +1292,8 @@ foreach ($usersDataRaw as $userId => $userData) {
         document.addEventListener('DOMContentLoaded', function () {
             const statusFilter = document.getElementById('statusFilter');
             const sortOrder = document.getElementById('sortOrder');
+            const bookingsPager = createTablePager('.bookings-table tbody', '#bookingsPager', 10);
+
             if (statusFilter) {
                 statusFilter.addEventListener('change', function () {
                     const status = this.value.toLowerCase();
@@ -1224,12 +1301,11 @@ foreach ($usersDataRaw as $userId => $userData) {
 
                     rows.forEach(row => {
                         const statusCell = row.querySelector('.status-badge');
-                        if (status === '' || (statusCell && statusCell.textContent.toLowerCase().includes(status))) {
-                            row.style.display = '';
-                        } else {
-                            row.style.display = 'none';
-                        }
+                        const matches = status === '' || (statusCell && statusCell.textContent.toLowerCase().includes(status));
+                        row.dataset.filtered = matches ? 'visible' : 'hidden';
                     });
+                    document.querySelector('#bookingsPager').dataset.page = '1';
+                    bookingsPager.refresh();
                 });
             }
             if (sortOrder) {
@@ -1243,6 +1319,7 @@ foreach ($usersDataRaw as $userId => $userData) {
                         return (ta - tb) * dir;
                     });
                     rows.forEach(r => tbody.appendChild(r));
+                    bookingsPager.refresh();
                 };
                 sortOrder.addEventListener('change', applySort);
                 applySort();

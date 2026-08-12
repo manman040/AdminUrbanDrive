@@ -423,6 +423,14 @@ function rm($n) { return 'RM ' . number_format((float)$n, 2); }
 		tr { transition: all 0.2s ease; }
 		tr:hover { background: linear-gradient(90deg, #fff5f2 0%, #ffffff 100%); transform: scale(1.001); box-shadow: 0 2px 8px rgba(255, 107, 53, 0.1); }
 		tr:last-child td { border-bottom: none; }
+
+		.table-pager { display:flex; align-items:center; justify-content:center; gap:6px; padding:20px 0 4px; flex-wrap:wrap; }
+		.table-pager .page-btn { min-width:36px; height:36px; padding:0 10px; border:2px solid #e2e8f0; background:#fff; border-radius:8px; font-size:13px; font-weight:600; color:#475569; cursor:pointer; transition:all 0.2s ease; }
+		.table-pager .page-btn:hover:not(:disabled) { border-color:#ff6b35; color:#ff6b35; }
+		.table-pager .page-btn.active { background:#ff6b35; border-color:#ff6b35; color:#fff; }
+		.table-pager .page-btn:disabled { opacity:0.4; cursor:not-allowed; }
+		.table-pager .page-ellipsis { color:#94a3b8; padding:0 4px; }
+
 		.badge { padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
 		.badge-success { background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); color: #065f46; border: 1px solid #10b981; }
 		.badge-warning { background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); color: #92400e; border: 1px solid #f59e0b; }
@@ -650,6 +658,7 @@ function rm($n) { return 'RM ' . number_format((float)$n, 2); }
 						<?php endforeach; endif; ?>
 					</tbody>
 				</table>
+				<div class="table-pager" id="commissionPager"></div>
 			</div>
 		</div>
 	</div>
@@ -684,6 +693,7 @@ function rm($n) { return 'RM ' . number_format((float)$n, 2); }
 						</thead>
 						<tbody></tbody>
 					</table>
+					<div class="table-pager" id="jobsPager"></div>
 				</div>
 			</div>
 		</div>
@@ -727,18 +737,92 @@ function rm($n) { return 'RM ' . number_format((float)$n, 2); }
 	</div>
 
 	<script>
+	// Splits a table's rows into pages of `perPage` and renders numbered
+	// controls + prev/next arrows. Rows carrying data-filtered="hidden" (set
+	// by a search box or status select) are excluded from the count so
+	// pagination and filtering compose instead of fighting over each row's
+	// display style.
+	function createTablePager(tbodySelector, pagerSelector, perPage) {
+		const tbody = document.querySelector(tbodySelector);
+		const pager = document.querySelector(pagerSelector);
+		if (!tbody || !pager) {
+			return { refresh: function () {} };
+		}
+
+		function refresh() {
+			const rows = Array.prototype.filter.call(tbody.children, function (row) {
+				return row.tagName === 'TR' && row.dataset.filtered !== 'hidden';
+			});
+			const totalPages = Math.max(1, Math.ceil(rows.length / perPage));
+			let current = parseInt(pager.dataset.page || '1', 10);
+			if (current > totalPages) current = totalPages;
+			if (current < 1) current = 1;
+			pager.dataset.page = current;
+
+			rows.forEach(function (row, i) {
+				row.style.display = (Math.floor(i / perPage) + 1 === current) ? '' : 'none';
+			});
+
+			renderControls(totalPages, current);
+		}
+
+		function renderControls(totalPages, current) {
+			if (totalPages <= 1) {
+				pager.innerHTML = '';
+				return;
+			}
+			let start = Math.max(1, current - 2);
+			let end = Math.min(totalPages, start + 4);
+			start = Math.max(1, end - 4);
+
+			let html = '<button type="button" class="page-btn" data-page="' + (current - 1) + '"' + (current === 1 ? ' disabled' : '') + '>&laquo;</button>';
+			if (start > 1) {
+				html += '<button type="button" class="page-btn" data-page="1">1</button>';
+				if (start > 2) html += '<span class="page-ellipsis">&hellip;</span>';
+			}
+			for (let p = start; p <= end; p++) {
+				html += '<button type="button" class="page-btn' + (p === current ? ' active' : '') + '" data-page="' + p + '">' + p + '</button>';
+			}
+			if (end < totalPages) {
+				if (end < totalPages - 1) html += '<span class="page-ellipsis">&hellip;</span>';
+				html += '<button type="button" class="page-btn" data-page="' + totalPages + '">' + totalPages + '</button>';
+			}
+			html += '<button type="button" class="page-btn" data-page="' + (current + 1) + '"' + (current === totalPages ? ' disabled' : '') + '>&raquo;</button>';
+			pager.innerHTML = html;
+
+			pager.querySelectorAll('.page-btn:not([disabled])').forEach(function (btn) {
+				btn.addEventListener('click', function () {
+					pager.dataset.page = this.dataset.page;
+					refresh();
+					tbody.closest('table').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+				});
+			});
+		}
+
+		pager.dataset.page = '1';
+		refresh();
+		return { refresh: refresh };
+	}
+
+	const commissionPager = createTablePager('#commissionTable tbody', '#commissionPager', 10);
+	const jobsPager = createTablePager('#jobsTable tbody', '#jobsPager', 10);
+
 	document.getElementById('search').addEventListener('input', function() {
 		const q = this.value.toLowerCase();
 		document.querySelectorAll('#commissionTable tbody tr').forEach(r => {
-			r.style.display = r.textContent.toLowerCase().includes(q) ? '' : 'none';
+			r.dataset.filtered = r.textContent.toLowerCase().includes(q) ? 'visible' : 'hidden';
 		});
+		document.querySelector('#commissionPager').dataset.page = '1';
+		commissionPager.refresh();
 	});
 	document.getElementById('status').addEventListener('change', function() {
 		const v = this.value.toLowerCase();
 		document.querySelectorAll('#commissionTable tbody tr').forEach(r => {
 			const badge = r.querySelector('td:nth-child(7) .badge'); // Status is now column 7
-			r.style.display = !v || (badge && badge.textContent.toLowerCase().includes(v)) ? '' : 'none';
+			r.dataset.filtered = (!v || (badge && badge.textContent.toLowerCase().includes(v))) ? 'visible' : 'hidden';
 		});
+		document.querySelector('#commissionPager').dataset.page = '1';
+		commissionPager.refresh();
 	});
 
 
@@ -975,6 +1059,7 @@ function rm($n) { return 'RM ' . number_format((float)$n, 2); }
 	function renderJobsTable() {
 		const tbody = document.querySelector('#jobsTable tbody');
 		tbody.innerHTML = '';
+		document.querySelector('#jobsPager').dataset.page = '1';
 		const jobs = (driverJobsById[currentDriverId] || []).slice();
 		const year = document.getElementById('yearFilter').value;
 		const month = document.getElementById('monthFilter').value;
@@ -1006,6 +1091,7 @@ function rm($n) { return 'RM ' . number_format((float)$n, 2); }
 			td.textContent = 'No jobs for selected month';
 			tr.appendChild(td);
 			tbody.appendChild(tr);
+			jobsPager.refresh();
 			return;
 		}
 		filtered.forEach(j => {
@@ -1030,6 +1116,7 @@ function rm($n) { return 'RM ' . number_format((float)$n, 2); }
 			`;
 			tbody.appendChild(tr);
 		});
+		jobsPager.refresh();
 	}
 
 	function parseJobDate(j) {

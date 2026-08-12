@@ -247,6 +247,14 @@ function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 		tr { transition: all 0.2s ease; }
 		tr:hover { background: linear-gradient(90deg, #fff5f2 0%, #ffffff 100%); transform: scale(1.001); box-shadow: 0 2px 8px rgba(255, 107, 53, 0.1); }
 		tr:last-child td { border-bottom: none; }
+
+		.table-pager { display:flex; align-items:center; justify-content:center; gap:6px; padding:20px 0 4px; flex-wrap:wrap; }
+		.table-pager .page-btn { min-width:36px; height:36px; padding:0 10px; border:2px solid #e2e8f0; background:#fff; border-radius:8px; font-size:13px; font-weight:600; color:#475569; cursor:pointer; transition:all 0.2s ease; }
+		.table-pager .page-btn:hover:not(:disabled) { border-color:#ff6b35; color:#ff6b35; }
+		.table-pager .page-btn.active { background:#ff6b35; border-color:#ff6b35; color:#fff; }
+		.table-pager .page-btn:disabled { opacity:0.4; cursor:not-allowed; }
+		.table-pager .page-ellipsis { color:#94a3b8; padding:0 4px; }
+
 		.badge { padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
 		.badge-rating { background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%); color: #1e40af; border: 1px solid #93c5fd; }
 		.driver-name-link { color: #ff6b35; font-weight: 600; cursor: pointer; text-decoration: none; transition: all 0.2s ease; }
@@ -510,6 +518,7 @@ function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 						<?php endforeach; endif; ?>
 					</tbody>
 				</table>
+				<div class="table-pager" id="driversPager"></div>
 			</div>
 		</div>
 	</div>
@@ -530,6 +539,73 @@ function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 	<script>
 		const driverStats = <?php echo json_encode($driverStats); ?>;
 		const bookingsData = <?php echo json_encode($bookingsData); ?>;
+
+		// Splits a table's rows into pages of `perPage` and renders numbered
+		// controls + prev/next arrows. Rows carrying data-filtered="hidden"
+		// (set by the search box) are excluded from the count so pagination
+		// and filtering compose instead of fighting over each row's display
+		// style.
+		function createTablePager(tbodySelector, pagerSelector, perPage) {
+			const tbody = document.querySelector(tbodySelector);
+			const pager = document.querySelector(pagerSelector);
+			if (!tbody || !pager) {
+				return { refresh: function () {} };
+			}
+
+			function refresh() {
+				const rows = Array.prototype.filter.call(tbody.children, function (row) {
+					return row.tagName === 'TR' && row.dataset.filtered !== 'hidden';
+				});
+				const totalPages = Math.max(1, Math.ceil(rows.length / perPage));
+				let current = parseInt(pager.dataset.page || '1', 10);
+				if (current > totalPages) current = totalPages;
+				if (current < 1) current = 1;
+				pager.dataset.page = current;
+
+				rows.forEach(function (row, i) {
+					row.style.display = (Math.floor(i / perPage) + 1 === current) ? '' : 'none';
+				});
+
+				renderControls(totalPages, current);
+			}
+
+			function renderControls(totalPages, current) {
+				if (totalPages <= 1) {
+					pager.innerHTML = '';
+					return;
+				}
+				let start = Math.max(1, current - 2);
+				let end = Math.min(totalPages, start + 4);
+				start = Math.max(1, end - 4);
+
+				let html = '<button type="button" class="page-btn" data-page="' + (current - 1) + '"' + (current === 1 ? ' disabled' : '') + '>&laquo;</button>';
+				if (start > 1) {
+					html += '<button type="button" class="page-btn" data-page="1">1</button>';
+					if (start > 2) html += '<span class="page-ellipsis">&hellip;</span>';
+				}
+				for (let p = start; p <= end; p++) {
+					html += '<button type="button" class="page-btn' + (p === current ? ' active' : '') + '" data-page="' + p + '">' + p + '</button>';
+				}
+				if (end < totalPages) {
+					if (end < totalPages - 1) html += '<span class="page-ellipsis">&hellip;</span>';
+					html += '<button type="button" class="page-btn" data-page="' + totalPages + '">' + totalPages + '</button>';
+				}
+				html += '<button type="button" class="page-btn" data-page="' + (current + 1) + '"' + (current === totalPages ? ' disabled' : '') + '>&raquo;</button>';
+				pager.innerHTML = html;
+
+				pager.querySelectorAll('.page-btn:not([disabled])').forEach(function (btn) {
+					btn.addEventListener('click', function () {
+						pager.dataset.page = this.dataset.page;
+						refresh();
+						tbody.closest('table').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+					});
+				});
+			}
+
+			pager.dataset.page = '1';
+			refresh();
+			return { refresh: refresh };
+		}
 
 		function showDriverDetails(driverId, driverName) {
 			const stats = driverStats.find(s => s.driver_id === driverId);
@@ -619,13 +695,16 @@ function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 		});
 
 		// Search functionality
+		const driversPager = createTablePager('#driversTable tbody', '#driversPager', 10);
 		const search = document.getElementById('search');
 		search.addEventListener('input', function() {
 			const q = (this.value || '').toLowerCase();
 			document.querySelectorAll('#driversTable tbody tr').forEach(row => {
 				const txt = row.textContent.toLowerCase();
-				row.style.display = txt.includes(q) ? '' : 'none';
+				row.dataset.filtered = txt.includes(q) ? 'visible' : 'hidden';
 			});
+			document.querySelector('#driversPager').dataset.page = '1';
+			driversPager.refresh();
 		});
 	</script>
 </body>
