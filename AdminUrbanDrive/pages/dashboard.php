@@ -20,7 +20,7 @@ $bookingDetailsForJs = [];
 
 // Get real data from Firebase, fallback to mock data if Firebase is not configured
 try {
-    $metrics = getMetrics();
+    $metrics = getMetrics($selectedMonth, $selectedYear, $allTime);
     $bookings = getBookingsData();
     
     // Ensure bookings is an array
@@ -693,19 +693,6 @@ foreach ($usersDataRaw as $userId => $userData) {
 
         .pie-chart { width:100%; height:100%; border-radius:50%; position:relative; background:linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%); box-shadow:inset 0 2px 8px rgba(0,0,0,0.1); }
 
-        .pie-segment {
-            position: absolute;
-            width: 100%;
-            height: 100%;
-            border-radius: 50%;
-            background: conic-gradient(
-                var(--color) 0deg var(--angle),
-                transparent var(--angle) 360deg
-            );
-            transform: rotate(var(--start-angle));
-            clip-path: polygon(50% 50%, 50% 0%, 100% 0%, 100% 100%, 50% 100%);
-        }
-
         .pie-center { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); text-align:center; background:linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); border-radius:50%; width:90px; height:90px; display:flex; flex-direction:column; align-items:center; justify-content:center; box-shadow:0 4px 12px rgba(0,0,0,0.15); color:#1e293b; border:2px solid rgba(255,255,255,0.8); }
 
         .total-amount { font-size:14px; font-weight:700; color:#1e293b; line-height:1.2; }
@@ -1026,34 +1013,31 @@ foreach ($usersDataRaw as $userId => $userData) {
                     <div class="charts-container">
                         <div class="chart">
                             <div class="pie-chart-container">
-                                <div class="pie-chart">
-                                    <?php
-                                    $current_angle = 0;
-                                    $colors = [
-                                        'pending' => '#f39c12',
-                                        'accepted' => '#3498db',
-                                        'arrived_pickup' => '#9b59b6',
-                                        'in_progress' => '#1abc9c',
-                                        'completed' => '#2ecc71',
-                                        'cancelled' => '#e74c3c'
-                                    ];
-                                    
-                                    foreach ($status_percentages as $status => $percentage):
-                                        if ($percentage > 0):
-                                            $angle = ($percentage / 100) * 360;
-                                            $color = $colors[$status];
-                                    ?>
-                                    <div class="pie-segment" 
-                                         style="--angle: <?php echo $angle; ?>deg; 
-                                                --start-angle: <?php echo $current_angle; ?>deg; 
-                                                --color: <?php echo $color; ?>;">
-                                    </div>
-                                    <?php
-                                            $current_angle += $angle;
-                                        endif;
-                                    endforeach;
-                                    ?>
-                                </div>
+                                <?php
+                                $colors = [
+                                    'pending' => '#f39c12',
+                                    'accepted' => '#3498db',
+                                    'arrived_pickup' => '#9b59b6',
+                                    'in_progress' => '#1abc9c',
+                                    'completed' => '#2ecc71',
+                                    'cancelled' => '#e74c3c'
+                                ];
+
+                                // Single conic-gradient covering the whole circle -- one <div>
+                                // per slice with a fixed right-half clip-path used to render
+                                // wedges, so a single 100%-share status only ever painted the
+                                // right half of the circle instead of the full ring.
+                                $current_angle = 0;
+                                $gradient_stops = [];
+                                foreach ($status_percentages as $status => $percentage) {
+                                    if ($percentage <= 0) continue;
+                                    $angle = ($percentage / 100) * 360;
+                                    $gradient_stops[] = $colors[$status] . ' ' . $current_angle . 'deg ' . ($current_angle + $angle) . 'deg';
+                                    $current_angle += $angle;
+                                }
+                                $pie_background = $gradient_stops ? ('conic-gradient(' . implode(', ', $gradient_stops) . ')') : '#e2e8f0';
+                                ?>
+                                <div class="pie-chart" style="background: <?php echo $pie_background; ?>;"></div>
                                 <div class="pie-center">
                                     <div class="total-amount">RM <?php echo number_format($total_amount, 2); ?></div>
                                     <div class="total-bookings"><?php echo $total_bookings; ?> Total</div>

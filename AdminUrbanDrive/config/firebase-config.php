@@ -429,10 +429,10 @@ function getAverageRatingFromFeedback() {
     }
 }
 
-function getMetrics() {
+function getMetrics($month = null, $year = null, $allTime = true) {
     $bookings = getFirebaseData('bookings');
     $today = date('Y-m-d');
-    
+
     // Check if bookings is null or empty
     if ($bookings === null || !is_array($bookings) || empty($bookings)) {
         // Still try to get average rating even if no bookings
@@ -444,25 +444,27 @@ function getMetrics() {
             'average_rating' => $averageRating
         ];
     }
-    
+
     $todayBookings = [];
     $totalRevenue = 0;
     $activeBookings = 0;
-    
+
     foreach ($bookings as $bookingId => $booking) {
         // Skip if booking is not an array
         if (!is_array($booking)) {
             continue;
         }
-        
+
+        $bookingSeconds = isset($booking['createdAt']) ? firebaseTimestampToSeconds($booking['createdAt']) : null;
+
         // Check if booking is from today (using createdAt timestamp)
-        if (isset($booking['createdAt'])) {
-            $bookingDate = date('Y-m-d', firebaseTimestampToSeconds($booking['createdAt']));
+        if ($bookingSeconds !== null) {
+            $bookingDate = date('Y-m-d', $bookingSeconds);
             if ($bookingDate === $today) {
                 $todayBookings[] = $booking;
             }
         }
-        
+
         // Count active bookings (all non-completed rides)
         if (isset($booking['status'])) {
             $status = strtolower($booking['status']);
@@ -470,10 +472,21 @@ function getMetrics() {
                 $activeBookings++;
             }
         }
-        
-        // Calculate total revenue from completed rides only
+
+        // Calculate total revenue from completed rides only, scoped to the same
+        // month/year (or all-time) the rest of the dashboard is currently showing
+        // -- otherwise this tile is a lifetime total sitting next to a
+        // month-scoped breakdown and looks inflated/wrong by comparison.
         if (isset($booking['status']) && strtolower($booking['status']) === 'completed') {
-            $totalRevenue += bookingFareAmount($booking);
+            $inSelectedPeriod = $allTime;
+            if (!$allTime) {
+                $inSelectedPeriod = $bookingSeconds !== null
+                    && intval(date('n', $bookingSeconds)) === $month
+                    && intval(date('Y', $bookingSeconds)) === $year;
+            }
+            if ($inSelectedPeriod) {
+                $totalRevenue += bookingFareAmount($booking);
+            }
         }
     }
     
