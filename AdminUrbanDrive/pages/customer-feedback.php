@@ -117,7 +117,7 @@ function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>Customer Feedback - PerdaRide</title>
+	<title>Customer Feedback - Urban Drive</title>
 	<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
 	<style>
 		* { margin: 0; padding: 0; box-sizing: border-box; }
@@ -393,7 +393,7 @@ function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 <body>
 	<!-- Top Navigation Bar -->
 	<nav class="top-nav">
-		<div class="top-nav-brand">PerdaRide</div>
+		<div class="top-nav-brand">Urban Drive</div>
 		<div class="top-nav-menu">
 			<a href="dashboard.php" class="top-nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'dashboard.php' ? 'active' : ''; ?>">
 				<i class="fas fa-tachometer-alt"></i>
@@ -432,7 +432,7 @@ function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 	<div class="container">
 		<div class="sidebar">
 			<div class="sidebar-header">
-				<h2>PerdaRide</h2>
+				<h2>Urban Drive</h2>
 			</div>
 
 			<a href="dashboard.php" class="nav-item">

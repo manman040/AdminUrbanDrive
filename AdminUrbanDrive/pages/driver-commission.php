@@ -289,7 +289,7 @@ function rm($n) { return 'RM ' . number_format((float)$n, 2); }
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>Driver Commission - PerdaRide</title>
+	<title>Driver Commission - Urban Drive</title>
 	<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
 	<style>
 		* { margin: 0; padding: 0; box-sizing: border-box; }
@@ -477,7 +477,7 @@ function rm($n) { return 'RM ' . number_format((float)$n, 2); }
 <body>
 	<!-- Top Navigation Bar -->
 	<nav class="top-nav">
-		<div class="top-nav-brand">PerdaRide</div>
+		<div class="top-nav-brand">Urban Drive</div>
 		<div class="top-nav-menu">
 			<a href="dashboard.php" class="top-nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'dashboard.php' ? 'active' : ''; ?>">
 				<i class="fas fa-tachometer-alt"></i>
@@ -516,7 +516,7 @@ function rm($n) { return 'RM ' . number_format((float)$n, 2); }
 	<div class="container">
 		<div class="sidebar">
 			<div class="sidebar-header">
-				<h2>PerdaRide</h2>
+				<h2>Urban Drive</h2>
 			</div>
 
 			<a href="dashboard.php" class="nav-item">

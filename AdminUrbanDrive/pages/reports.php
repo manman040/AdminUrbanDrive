@@ -602,7 +602,7 @@ if (!empty($userRideCount)) {
 <body>
 	<!-- Top Navigation Bar -->
 	<nav class="top-nav">
-		<div class="top-nav-brand">PerdaRide</div>
+		<div class="top-nav-brand">Urban Drive</div>
 		<div class="top-nav-menu">
 			<a href="dashboard.php" class="top-nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'dashboard.php' ? 'active' : ''; ?>">
 				<i class="fas fa-tachometer-alt"></i>
@@ -641,7 +641,7 @@ if (!empty($userRideCount)) {
 	<div class="container">
 		<div class="sidebar">
 			<div class="sidebar-header">
-				<h2>PerdaRide</h2>
+				<h2>Urban Drive</h2>
 			</div>
 
 			<a href="dashboard.php" class="nav-item">

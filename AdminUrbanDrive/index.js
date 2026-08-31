@@ -40,7 +40,7 @@ app.post('/api/toyyibpay/create-bill', async (req, res) => {
     const form = new URLSearchParams({
       userSecretKey: process.env.TOYYIBPAY_SECRET,
       categoryCode: process.env.TOYYIBPAY_CATEGORY,
-      billName: billName || 'PerdaRide Commission',
+      billName: billName || 'Urban Drive Commission',
       billDescription: billDescription || `Commission for ${driverId}`,
       billPriceSetting: '1',
       billPayorInfo: '1',
@@ -84,7 +84,7 @@ app.get('/api/toyyibpay/success', (req, res) => {
       <body>
         <div class="box">
           <h1>Payment received</h1>
-          <p>You can close this page and return to PerdaRide.</p>
+          <p>You can close this page and return to Urban Drive.</p>
         </div>
       </body>
     </html>
