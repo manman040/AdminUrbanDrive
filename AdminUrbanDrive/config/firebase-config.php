@@ -9,7 +9,7 @@
 // Firebase project configuration (the web API key is a public identifier,
 // not a secret -- access is controlled by the database rules).
 $firebase_config = [
-    'apiKey' => 'AIzaSyA5vBgqJYlDLRw-SrEYodSiCV9QW3Pjcvs',
+    'apiKey' => 'AIzaSyCqkGpb-FMP6usYCMovttA8BNXfUtDE-c0',
     'authDomain' => 'drive-ab344.firebaseapp.com',
     'projectId' => 'drive-ab344',
     'storageBucket' => 'drive-ab344.firebasestorage.app',
