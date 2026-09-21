@@ -1,10 +1,9 @@
 <?php
 session_start();
+require_once 'firebase-config.php';
 
-// Destroy all session data
-session_destroy();
+// Drop the Firebase tokens and the session cookie, not just the server-side data.
+firebaseClearSession();
 
-// Redirect to login page
 header('Location: index.php');
 exit;
-?>

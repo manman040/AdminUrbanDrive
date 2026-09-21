@@ -2,10 +2,7 @@
 session_start();
 require_once 'firebase-config.php';
 
-if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
-	header('Location: index.php');
-	exit;
-}
+requireAdminSession();
 
 // Fetch ratings from Firebase: ratings/{driverId}/{ratingId}
 $ratingsData = [];
@@ -438,6 +435,10 @@ function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 			<a href="dashboard.php" class="nav-item">
 				<i class="fas fa-tachometer-alt"></i>
 				Rides Management
+			</a>
+			<a href="rides-management.php" class="nav-item">
+			    <i class="fas fa-route"></i>
+			    All Rides
 			</a>
 			<a href="driver-requests.php" class="nav-item">
 				<i class="fas fa-user-plus"></i>

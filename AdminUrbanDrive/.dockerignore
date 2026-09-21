@@ -18,3 +18,5 @@ package-lock.json
 .env
 Dockerfile
 .dockerignore
+service-account*.json
+*-firebase-adminsdk-*.json

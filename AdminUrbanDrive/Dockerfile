@@ -13,6 +13,8 @@ RUN a2enmod rewrite
 RUN { \
     echo "display_errors=Off"; \
     echo "log_errors=On"; \
+    echo "session.cookie_httponly=1"; \
+    echo "session.cookie_samesite=Lax"; \
     } > /usr/local/etc/php/conf.d/production-errors.ini
 
 COPY . /var/www/html/

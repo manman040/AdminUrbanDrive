@@ -1,35 +1,45 @@
 <?php
-// Firebase Configuration
-// IMPORTANT: You need to replace these placeholder values with your actual Firebase project credentials
-// Get these values from your google-services.json file and Firebase Console
+// Firebase configuration + Realtime Database helpers for the admin panel.
+//
+// Every database request carries the signed-in admin's Firebase ID token
+// (?auth=<token>). The database rules only grant admin access to accounts
+// listed under /admins/{uid}, so a valid Firebase login alone is not enough:
+// the account must also be on that list. Setup steps: Docs/ADMIN_AUTH_SETUP.md
 
-// Firebase project configuration
+// Firebase project configuration (the web API key is a public identifier,
+// not a secret -- access is controlled by the database rules).
 $firebase_config = [
-    'apiKey' => 'AIzaSyA1m8DqpMjw2AoMcTxqA9fFa-6J-Ve0_U8', // From your google-services.json
-    'authDomain' => 'drive-ab344.firebaseapp.com', // From your project ID
-    'projectId' => 'drive-ab344', // From your google-services.json
-    'storageBucket' => 'drive-ab344.firebasestorage.app', // From your google-services.json
-    'messagingSenderId' => '650014399592', // From your google-services.json
-    'appId' => '1:650014399592:android:8a254985e60505bd3bafdd' // From your google-services.json
+    'apiKey' => 'AIzaSyA5vBgqJYlDLRw-SrEYodSiCV9QW3Pjcvs',
+    'authDomain' => 'drive-ab344.firebaseapp.com',
+    'projectId' => 'drive-ab344',
+    'storageBucket' => 'drive-ab344.firebasestorage.app',
+    'messagingSenderId' => '650014399592',
+    'appId' => '1:650014399592:android:8a254985e60505bd3bafdd'
 ];
 
 // Firebase Realtime Database URL
-$firebase_database_url = 'https://drive-ab344-default-rtdb.asia-southeast1.firebasedatabase.app/'; // From your google-services.json
+$firebase_database_url = 'https://drive-ab344-default-rtdb.asia-southeast1.firebasedatabase.app/';
 
-// Firebase Storage URL
+// Firebase Storage URL (legacy -- documents are now Cloudinary URLs)
 $firebase_storage_url = 'https://firebasestorage.googleapis.com/v0/b/drive-ab344.firebasestorage.app/o/';
 
-// Check if Firebase is properly configured
+// Last error message from a Firebase request (for diagnostics pages)
+$firebase_last_error = '';
+
 function isFirebaseConfigured() {
     global $firebase_config, $firebase_database_url;
-    
-    // Check if placeholder values are still being used
+
     if (strpos($firebase_config['apiKey'], 'AIzaSyBqXqXqXqXqXqXqXqXqXqXqXqXqXqXqXqXq') !== false ||
         strpos($firebase_database_url, 'your-project-id') !== false) {
         return false;
     }
-    
+
     return true;
+}
+
+function firebaseLastError() {
+    global $firebase_last_error;
+    return $firebase_last_error;
 }
 
 function firebaseTimestampValue($timestamp) {
@@ -109,206 +119,416 @@ function firstBookingValue($booking, $fields, $default = '') {
     return $default;
 }
 
-// Firebase Authentication using REST API
-function authenticateWithFirebase($email, $password) {
-    global $firebase_config;
-    
-    // Check if Firebase is configured
-    if (!isFirebaseConfigured()) {
-        error_log('Firebase not configured. Please update firebase-config.php with your actual Firebase credentials.');
-        return false;
-    }
-    
-    $url = 'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' . $firebase_config['apiKey'];
-    $data = [
-        'email' => $email,
-        'password' => $password,
-        'returnSecureToken' => true
-    ];
-    
+// ---------------------------------------------------------------------------
+// HTTP
+// ---------------------------------------------------------------------------
+
+/**
+ * Performs one HTTP request and returns ['status' => int, 'body' => mixed,
+ * 'raw' => string]. status is 0 when the connection itself failed. body is
+ * the JSON-decoded response (null if the response was not JSON).
+ */
+function firebaseHttp($method, $url, $body = null, $formEncoded = false) {
+    global $firebase_last_error;
+
+    $headers = $formEncoded
+        ? "Content-Type: application/x-www-form-urlencoded\r\n"
+        : "Content-Type: application/json\r\n";
+
     $options = [
         'http' => [
-            'header' => "Content-type: application/json\r\n",
-            'method' => 'POST',
-            'content' => json_encode($data),
+            'method' => $method,
+            'header' => $headers,
             'timeout' => 10,
-            'ignore_errors' => true // don't warn/abort on Firebase's 400 response for bad credentials -- we read the body ourselves below
+            'ignore_errors' => true, // read 4xx/5xx bodies ourselves instead of warning
         ]
     ];
+    if ($body !== null) {
+        $options['http']['content'] = $formEncoded ? http_build_query($body) : json_encode($body);
+    }
 
     $context = stream_context_create($options);
-    $result = @file_get_contents($url, false, $context);
+    $raw = @file_get_contents($url, false, $context);
 
-    if ($result === FALSE) {
-        error_log('Firebase authentication failed: Unable to connect to Firebase Auth API');
+    $status = 0;
+    if (isset($http_response_header[0]) && preg_match('/\s(\d{3})\s/', $http_response_header[0], $m)) {
+        $status = (int) $m[1];
+    }
+
+    if ($raw === false) {
+        $firebase_last_error = 'Could not connect to ' . parse_url($url, PHP_URL_HOST);
+        return ['status' => 0, 'body' => null, 'raw' => ''];
+    }
+
+    return ['status' => $status, 'body' => json_decode($raw, true), 'raw' => $raw];
+}
+
+function firebaseResponseOk($response) {
+    return $response['status'] >= 200 && $response['status'] < 300;
+}
+
+function firebaseResponseError($response) {
+    if ($response['status'] === 0) {
+        return 'connection failed';
+    }
+    if (is_array($response['body']) && isset($response['body']['error'])) {
+        $error = $response['body']['error'];
+        if (is_array($error)) {
+            $error = $error['message'] ?? json_encode($error);
+        }
+        return (string) $error;
+    }
+    return 'HTTP ' . $response['status'];
+}
+
+// ---------------------------------------------------------------------------
+// Admin authentication (Firebase Auth + /admins allowlist)
+// ---------------------------------------------------------------------------
+
+/** Signs in with email/password. Returns the token payload or null. */
+function firebaseSignIn($email, $password) {
+    global $firebase_config;
+
+    $response = firebaseHttp(
+        'POST',
+        'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' . $firebase_config['apiKey'],
+        ['email' => $email, 'password' => $password, 'returnSecureToken' => true]
+    );
+
+    if (!firebaseResponseOk($response) || empty($response['body']['idToken'])) {
+        error_log('Firebase sign-in failed: ' . firebaseResponseError($response));
+        return null;
+    }
+
+    return $response['body'];
+}
+
+function firebaseStoreSession(array $tokens) {
+    $_SESSION['firebase_token'] = $tokens['idToken'];
+    $_SESSION['firebase_refresh_token'] = $tokens['refreshToken'] ?? ($_SESSION['firebase_refresh_token'] ?? '');
+    $_SESSION['firebase_user_id'] = $tokens['localId'];
+    // Refresh one minute before Firebase's own expiry so a request never
+    // goes out with a token that dies mid-flight.
+    $_SESSION['firebase_token_expires_at'] = time() + (int) ($tokens['expiresIn'] ?? 3600) - 60;
+}
+
+/** Exchanges the stored refresh token for a fresh ID token. */
+function firebaseRefreshSession() {
+    global $firebase_config;
+
+    $refreshToken = $_SESSION['firebase_refresh_token'] ?? '';
+    if ($refreshToken === '') {
         return false;
     }
 
-    $response = json_decode($result, true);
+    $response = firebaseHttp(
+        'POST',
+        'https://securetoken.googleapis.com/v1/token?key=' . $firebase_config['apiKey'],
+        ['grant_type' => 'refresh_token', 'refresh_token' => $refreshToken],
+        true
+    );
 
-    if (isset($response['idToken'])) {
-        // Store the token in session for future use
-        $_SESSION['firebase_token'] = $response['idToken'];
-        $_SESSION['firebase_user_id'] = $response['localId'];
+    if (!firebaseResponseOk($response) || empty($response['body']['id_token'])) {
+        error_log('Firebase token refresh failed: ' . firebaseResponseError($response));
+        return false;
+    }
+
+    firebaseStoreSession([
+        'idToken' => $response['body']['id_token'],
+        'refreshToken' => $response['body']['refresh_token'] ?? $refreshToken,
+        'localId' => $response['body']['user_id'] ?? ($_SESSION['firebase_user_id'] ?? ''),
+        'expiresIn' => $response['body']['expires_in'] ?? 3600,
+    ]);
+    return true;
+}
+
+/** A valid ID token for the signed-in admin, refreshing if needed; null if none. */
+function firebaseAuthToken() {
+    if (session_status() !== PHP_SESSION_ACTIVE || empty($_SESSION['firebase_token'])) {
+        return null;
+    }
+    if (time() >= (int) ($_SESSION['firebase_token_expires_at'] ?? 0)) {
+        if (!firebaseRefreshSession()) {
+            return null;
+        }
+    }
+    return $_SESSION['firebase_token'];
+}
+
+/** True only if /admins/{uid} is exactly `true` in the database. */
+function firebaseIsAdminUid($uid, $idToken) {
+    global $firebase_database_url;
+
+    $response = firebaseHttp(
+        'GET',
+        $firebase_database_url . 'admins/' . rawurlencode($uid) . '.json?auth=' . rawurlencode($idToken)
+    );
+    return firebaseResponseOk($response) && $response['body'] === true;
+}
+
+/**
+ * Logs an admin in. Returns 'ok', or one of the error codes shown on the
+ * login page: 'invalid_credentials', 'not_admin', 'not_configured'.
+ */
+function authenticateAdmin($email, $password) {
+    if (!isFirebaseConfigured()) {
+        error_log('Firebase not configured. Update config/firebase-config.php.');
+        return 'not_configured';
+    }
+
+    $tokens = firebaseSignIn($email, $password);
+    if ($tokens === null) {
+        return 'invalid_credentials';
+    }
+
+    if (!firebaseIsAdminUid($tokens['localId'], $tokens['idToken'])) {
+        error_log('Login refused: uid ' . $tokens['localId'] . ' is not listed under /admins');
+        return 'not_admin';
+    }
+
+    session_regenerate_id(true);
+    firebaseStoreSession($tokens);
+    $_SESSION['admin_logged_in'] = true;
+    $_SESSION['admin_username'] = $email;
+    $_SESSION['auth_method'] = 'firebase';
+    return 'ok';
+}
+
+// Kept for older callers.
+function authenticateWithFirebase($email, $password) {
+    return authenticateAdmin($email, $password) === 'ok';
+}
+
+function firebaseClearSession() {
+    if (session_status() !== PHP_SESSION_ACTIVE) {
+        return;
+    }
+    $_SESSION = [];
+    if (ini_get('session.use_cookies')) {
+        $params = session_get_cookie_params();
+        setcookie(session_name(), '', time() - 42000, $params['path'], $params['domain'], $params['secure'], $params['httponly']);
+    }
+    session_destroy();
+}
+
+/**
+ * Gate for every admin page and action. Redirects to the login page (or,
+ * for JSON endpoints, answers 401) unless there is a logged-in admin whose
+ * Firebase token is valid or can be refreshed.
+ */
+function requireAdminSession($jsonResponse = false) {
+    if (session_status() !== PHP_SESSION_ACTIVE) {
+        session_start();
+    }
+
+    $loggedIn = !empty($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true;
+    if ($loggedIn && firebaseAuthToken() !== null) {
+        return;
+    }
+
+    $expired = $loggedIn; // was logged in, but the token could not be refreshed
+    firebaseClearSession();
+
+    if ($jsonResponse) {
+        http_response_code(401);
+        header('Content-Type: application/json');
+        echo json_encode([
+            'success' => false,
+            'message' => $expired ? 'Session expired, please log in again' : 'Unauthorized'
+        ]);
+        exit;
+    }
+
+    header('Location: index.php' . ($expired ? '?error=session_expired' : ''));
+    exit;
+}
+
+// ---------------------------------------------------------------------------
+// Realtime Database REST helpers
+// ---------------------------------------------------------------------------
+
+function firebaseDatabaseUrl($path, array $query = []) {
+    global $firebase_database_url;
+
+    $token = firebaseAuthToken();
+    if ($token !== null) {
+        $query['auth'] = $token;
+    }
+
+    $url = $firebase_database_url . ltrim($path, '/') . '.json';
+    if (!empty($query)) {
+        $url .= '?' . http_build_query($query);
+    }
+    return $url;
+}
+
+/**
+ * Reads a path. Returns the decoded array, or [] when the path is empty or
+ * the request failed (the failure is logged and kept in firebaseLastError()).
+ */
+function getFirebaseData($path) {
+    global $firebase_last_error;
+
+    if (!isFirebaseConfigured()) {
+        error_log('Firebase not configured. Update config/firebase-config.php.');
+        return [];
+    }
+
+    $response = firebaseHttp('GET', firebaseDatabaseUrl($path));
+
+    if (!firebaseResponseOk($response)) {
+        $firebase_last_error = "Read of '$path' failed: " . firebaseResponseError($response);
+        error_log('Firebase ' . $firebase_last_error);
+        return [];
+    }
+
+    if (!is_array($response['body'])) {
+        // "null" for a missing path, or a scalar value -- nothing to iterate.
+        return [];
+    }
+
+    return $response['body'];
+}
+
+function firebaseWriteResult($method, $path, $response) {
+    global $firebase_last_error;
+
+    if (firebaseResponseOk($response)) {
         return true;
     }
-    
+    $firebase_last_error = "$method '$path' failed: " . firebaseResponseError($response);
+    error_log('Firebase ' . $firebase_last_error);
     return false;
 }
 
-// Firebase Realtime Database functions using REST API
-function getFirebaseData($path) {
-    global $firebase_database_url;
-    
-    // Check if Firebase is configured
-    if (!isFirebaseConfigured()) {
-        error_log('Firebase not configured. Please update firebase-config.php with your actual Firebase credentials.');
-        return [];
-    }
-    
-    $url = $firebase_database_url . $path . '.json';
-    
-    // Add error handling for the HTTP request
-    $context = stream_context_create([
-        'http' => [
-            'timeout' => 10, // 10 second timeout
-            'ignore_errors' => true, // Don't throw errors on HTTP errors
-            'method' => 'GET'
-        ]
-    ]);
-    
-    $result = @file_get_contents($url, false, $context);
-    
-    if ($result === FALSE) {
-        // Try to get HTTP response code
-        $http_response = isset($http_response_header) ? $http_response_header : [];
-        $error_info = '';
-        if (!empty($http_response)) {
-            $status_line = $http_response[0];
-            $error_info = ' - Response: ' . $status_line;
-        }
-        error_log('Failed to read data from Firebase: ' . $url . $error_info);
-        return [];
-    }
-    
-    // Check for HTTP errors in response headers
-    if (isset($http_response_header)) {
-        $status_line = $http_response_header[0];
-        if (strpos($status_line, '200') === false && strpos($status_line, '201') === false) {
-            error_log('Firebase HTTP error for path ' . $path . ': ' . $status_line);
-            // Still try to parse the response in case it's an error message
-        }
-    }
-    
-    // Handle null response (Firebase returns "null" string when path doesn't exist)
-    if (trim($result) === 'null' || $result === '') {
-        error_log("Firebase path '$path' returned null or empty");
-        return [];
-    }
-    
-    $data = json_decode($result, true);
-    
-    // If json_decode fails, log and return empty array
-    if ($data === null) {
-        $jsonError = json_last_error();
-        if ($jsonError !== JSON_ERROR_NONE) {
-            error_log('JSON decode error for Firebase path ' . $path . ': ' . json_last_error_msg());
-            return [];
-        }
-        // If json_decode returned null but no error, it might be valid null JSON
-        // This shouldn't happen with our check above, but handle it anyway
-        error_log("Firebase path '$path' decoded to null (no JSON error)");
-        return [];
-    }
-    
-    // If we got an error response from Firebase (like "Permission denied"), return it as-is
-    // so the caller can detect and handle it
-    if (is_array($data) && isset($data['error'])) {
-        error_log("Firebase path '$path' returned error: " . $data['error']);
-        return $data;
-    }
-    
-    // Return the data if it's an array, otherwise return empty array
-    if (!is_array($data)) {
-        error_log("Firebase path '$path' returned non-array data: " . gettype($data));
-        return [];
-    }
-    
-    error_log("Firebase path '$path' returned " . count($data) . " items");
-    return $data;
-}
-
 function setFirebaseData($path, $data) {
-    global $firebase_database_url;
-    
-    // Check if Firebase is configured
     if (!isFirebaseConfigured()) {
-        error_log('Firebase not configured. Please update firebase-config.php with your actual Firebase credentials.');
         return false;
     }
-    
-    $url = $firebase_database_url . $path . '.json';
-    $options = [
-        'http' => [
-            'header' => "Content-type: application/json\r\n",
-            'method' => 'PUT',
-            'content' => json_encode($data),
-            'timeout' => 10,
-            'ignore_errors' => true
-        ]
-    ];
-
-    $context = stream_context_create($options);
-    $result = @file_get_contents($url, false, $context);
-    return $result !== FALSE;
+    return firebaseWriteResult('PUT', $path, firebaseHttp('PUT', firebaseDatabaseUrl($path), $data));
 }
 
 function updateFirebaseData($path, $data) {
-    global $firebase_database_url;
-    
-    // Check if Firebase is configured
     if (!isFirebaseConfigured()) {
-        error_log('Firebase not configured. Please update firebase-config.php with your actual Firebase credentials.');
         return false;
     }
-    
-    $url = $firebase_database_url . $path . '.json';
-    $options = [
-        'http' => [
-            'header' => "Content-type: application/json\r\n",
-            'method' => 'PATCH',
-            'content' => json_encode($data),
-            'timeout' => 10,
-            'ignore_errors' => true
-        ]
-    ];
-
-    $context = stream_context_create($options);
-    $result = @file_get_contents($url, false, $context);
-    return $result !== FALSE;
+    return firebaseWriteResult('PATCH', $path, firebaseHttp('PATCH', firebaseDatabaseUrl($path), $data));
 }
 
 function deleteFirebaseData($path) {
-    global $firebase_database_url;
-    
-    // Check if Firebase is configured
     if (!isFirebaseConfigured()) {
-        error_log('Firebase not configured. Please update firebase-config.php with your actual Firebase credentials.');
         return false;
     }
-    
-    $url = $firebase_database_url . $path . '.json';
-    $options = [
-        'http' => [
-            'method' => 'DELETE',
-            'timeout' => 10,
-            'ignore_errors' => true
-        ]
-    ];
+    return firebaseWriteResult('DELETE', $path, firebaseHttp('DELETE', firebaseDatabaseUrl($path)));
+}
 
-    $context = stream_context_create($options);
-    $result = @file_get_contents($url, false, $context);
-    return $result !== FALSE;
+// ---------------------------------------------------------------------------
+// Push (POST) a new child under $path. Returns the generated key, or null.
+// ---------------------------------------------------------------------------
+function pushFirebaseData($path, $data) {
+    if (!isFirebaseConfigured()) {
+        return null;
+    }
+    $response = firebaseHttp('POST', firebaseDatabaseUrl($path), $data);
+    if (!firebaseWriteResult('POST', $path, $response)) {
+        return null;
+    }
+    return is_array($response['body']) && isset($response['body']['name']) ? $response['body']['name'] : null;
+}
+
+// ---------------------------------------------------------------------------
+// Booking status vocabulary. These are the only values the mobile app writes
+// or understands (pending -> accepted -> arrived_pickup -> in_progress ->
+// completed, or cancelled at any point). Anything else written by the admin
+// simply hides the ride from both the driver and the rider.
+// ---------------------------------------------------------------------------
+function bookingStatuses() {
+    return ['pending', 'accepted', 'arrived_pickup', 'in_progress', 'completed', 'cancelled'];
+}
+
+function bookingActiveStatuses() {
+    return ['pending', 'accepted', 'arrived_pickup', 'in_progress'];
+}
+
+function bookingStatusLabel($status) {
+    $labels = [
+        'pending' => 'Pending',
+        'accepted' => 'Accepted',
+        'arrived_pickup' => 'Driver Arrived',
+        'in_progress' => 'In Progress',
+        'completed' => 'Completed',
+        'cancelled' => 'Cancelled',
+    ];
+    $key = normalizeBookingStatus($status);
+    return $labels[$key] ?? ucwords(str_replace('_', ' ', $key));
+}
+
+// Maps legacy/loose spellings (older admin code, mock data) onto the app's vocabulary.
+function normalizeBookingStatus($status) {
+    $key = strtolower(trim((string) $status));
+    $aliases = [
+        'confirmed' => 'accepted',
+        'assigned' => 'accepted',
+        'ongoing' => 'in_progress',
+        'on going' => 'in_progress',
+        'on_ride' => 'in_progress',
+        'started' => 'in_progress',
+        'arrived' => 'arrived_pickup',
+        'cancel' => 'cancelled',
+        'canceled' => 'cancelled',
+        'rejected' => 'cancelled',
+        'finish' => 'completed',
+        'finished' => 'completed',
+        'done' => 'completed',
+        'complete' => 'completed',
+    ];
+    return $aliases[$key] ?? $key;
+}
+
+// ---------------------------------------------------------------------------
+// In-app notifications: the same feeds the mobile app writes and reads
+// (user_notifications/{uid} for riders, driver_notifications/{uid} for drivers).
+// ---------------------------------------------------------------------------
+function pushAppNotification($uid, $isDriver, $title, $body, $bookingId = null) {
+    $uid = trim((string) $uid);
+    if ($uid === '') {
+        return null;
+    }
+    $payload = [
+        'title' => $title,
+        'body' => $body,
+        'read' => false,
+        'createdAt' => time() * 1000,
+        'source' => 'admin',
+    ];
+    if ($bookingId !== null && $bookingId !== '') {
+        $payload['bookingId'] = (string) $bookingId;
+    }
+    return pushFirebaseData(($isDriver ? 'driver_notifications/' : 'user_notifications/') . $uid, $payload);
+}
+
+// Human-readable date for the app's timestamps (registrationDate/createdAt are
+// milliseconds since epoch) with the older created_at strings as fallback.
+function formatFirebaseDate($record, $format = 'M d, Y') {
+    if (!is_array($record)) {
+        return '';
+    }
+    foreach (['registrationDate', 'createdAt', 'submittedAt', 'approved_at', 'created_at', 'updatedAt'] as $field) {
+        if (!isset($record[$field]) || $record[$field] === '' || $record[$field] === null) {
+            continue;
+        }
+        $value = $record[$field];
+        if (is_array($value) || is_numeric($value)) {
+            $seconds = firebaseTimestampToSeconds($value);
+            return $seconds > 0 ? date($format, $seconds) : '';
+        }
+        $parsed = strtotime((string) $value);
+        if ($parsed !== false) {
+            return date($format, $parsed);
+        }
+        return (string) $value;
+    }
+    return '';
 }
 
 // Example usage functions for your admin panel
@@ -384,6 +604,12 @@ function getFareSettings() {
             'bookingFee' => isset($categoryData['bookingFee']) && is_numeric($categoryData['bookingFee'])
                 ? (float) $categoryData['bookingFee']
                 : $defaults['bookingFee'],
+            'updatedAt' => isset($categoryData['updatedAt']) && is_numeric($categoryData['updatedAt'])
+                ? (int) $categoryData['updatedAt']
+                : null,
+            'updatedBy' => isset($categoryData['updatedBy']) && $categoryData['updatedBy'] !== ''
+                ? (string) $categoryData['updatedBy']
+                : null,
         ];
     }
 
@@ -400,6 +626,126 @@ function saveFareSettings($category, $baseFare, $perKm, $bookingFee) {
         'bookingFee' => $bookingFee,
         'updatedAt' => time() * 1000,
     ]);
+}
+
+// ---------------------------------------------------------------------------
+// Fare settings: labels, change detection and the change log
+// (fareSettingsHistory/{pushId}). Every save from the admin panel that
+// actually changes a value is recorded with who changed it, when, and the
+// old -> new values, so the Fare Settings page can show a history.
+// ---------------------------------------------------------------------------
+
+// The app calls these "Package A (1-4 passengers)" / "Package B (5-8 passengers)".
+function fareCategoryLabels() {
+    return [
+        'categoryA' => ['letter' => 'A', 'name' => 'Category A', 'tier' => 'Standard', 'package' => 'Package A', 'passengers' => '1-4 passengers'],
+        'categoryB' => ['letter' => 'B', 'name' => 'Category B', 'tier' => 'Premium', 'package' => 'Package B', 'passengers' => '5-8 passengers'],
+    ];
+}
+
+function fareFieldLabels() {
+    return ['baseFare' => 'Base fare', 'perKm' => 'Price per KM', 'bookingFee' => 'Booking fee'];
+}
+
+// Which of the three amounts differ between two settings arrays (2 dp).
+// Returns [field => ['from' => x, 'to' => y]] -- empty when nothing changed.
+function fareSettingsDiff(array $before, array $after) {
+    $changes = [];
+    foreach (fareFieldLabels() as $field => $label) {
+        $from = round((float) ($before[$field] ?? 0), 2);
+        $to = round((float) ($after[$field] ?? 0), 2);
+        if (abs($from - $to) >= 0.005) {
+            $changes[$field] = ['from' => $from, 'to' => $to];
+        }
+    }
+    return $changes;
+}
+
+/**
+ * Saves one category and, if anything changed, appends an entry to
+ * fareSettingsHistory. Returns:
+ *   ['success' => bool, 'message' => string, 'settings' => array,
+ *    'changes' => array, 'history' => entry-with-id|null]
+ */
+function saveFareSettingsWithHistory($category, $baseFare, $perKm, $bookingFee, $changedBy = 'admin') {
+    $defaults = fareSettingsDefaults();
+    if (!isset($defaults[$category])) {
+        return ['success' => false, 'message' => 'Invalid ride category', 'settings' => [], 'changes' => [], 'history' => null];
+    }
+
+    $current = getFareSettings();
+    $before = [
+        'baseFare' => round((float) ($current[$category]['baseFare'] ?? $defaults[$category]['baseFare']), 2),
+        'perKm' => round((float) ($current[$category]['perKm'] ?? $defaults[$category]['perKm']), 2),
+        'bookingFee' => round((float) ($current[$category]['bookingFee'] ?? $defaults[$category]['bookingFee']), 2),
+    ];
+    $after = [
+        'baseFare' => round((float) $baseFare, 2),
+        'perKm' => round((float) $perKm, 2),
+        'bookingFee' => round((float) $bookingFee, 2),
+    ];
+    $changes = fareSettingsDiff($before, $after);
+
+    $now = time() * 1000;
+    $record = $after + ['updatedAt' => $now, 'updatedBy' => (string) $changedBy];
+
+    if (!setFirebaseData('fareSettings/' . $category, $record)) {
+        return [
+            'success' => false,
+            'message' => 'Failed to save fare settings: ' . firebaseLastError(),
+            'settings' => $record,
+            'changes' => $changes,
+            'history' => null,
+        ];
+    }
+
+    $entry = null;
+    if (!empty($changes)) {
+        $entry = [
+            'category' => $category,
+            'changedAt' => $now,
+            'changedBy' => (string) $changedBy,
+            'before' => $before,
+            'after' => $after,
+            'changes' => $changes,
+        ];
+        $id = pushFirebaseData('fareSettingsHistory', $entry);
+        if ($id === null) {
+            error_log('Fare settings saved but the history entry could not be written: ' . firebaseLastError());
+        }
+        $entry['id'] = $id;
+    }
+
+    return [
+        'success' => true,
+        'message' => empty($changes) ? 'No changes to save' : 'Fare settings saved',
+        'settings' => $record,
+        'changes' => $changes,
+        'history' => $entry,
+    ];
+}
+
+// Newest first, at most $limit entries.
+function getFareSettingsHistory($limit = 100) {
+    $raw = getFirebaseData('fareSettingsHistory');
+    $entries = [];
+    if (is_array($raw)) {
+        foreach ($raw as $id => $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $entry['id'] = (string) $id;
+            $entry['changedAt'] = (int) firebaseTimestampValue($entry['changedAt'] ?? 0);
+            if (!is_array($entry['changes'] ?? null)) {
+                $entry['changes'] = [];
+            }
+            $entries[] = $entry;
+        }
+    }
+    usort($entries, function ($a, $b) {
+        return $b['changedAt'] <=> $a['changedAt'];
+    });
+    return array_slice($entries, 0, max(1, (int) $limit));
 }
 
 // Function to get average rating from customer feedback
@@ -468,7 +814,7 @@ function getMetrics($month = null, $year = null, $allTime = true) {
         // Count active bookings (all non-completed rides)
         if (isset($booking['status'])) {
             $status = strtolower($booking['status']);
-            if (!in_array($status, ['completed', 'cancelled', 'rejected'])) {
+            if (in_array(normalizeBookingStatus($status), bookingActiveStatuses(), true)) {
                 $activeBookings++;
             }
         }
@@ -614,20 +960,7 @@ function updateDriverCommission($driverId, $bookingId, $fareAmount, $commissionA
         $driverData['recent_jobs_total_unpaid'] = $driverData['commission_summary']['unpaid_commission'];
         $driverData['recent_jobs_total_commission'] = $driverData['commission_summary']['total_commission'];
         
-        // Update Firebase
-        $url = $firebase_database_url . "driver_commissions/{$driverId}.json";
-        $context = stream_context_create([
-            'http' => [
-                'method' => 'PUT',
-                'header' => 'Content-Type: application/json',
-                'content' => json_encode($driverData),
-                'ignore_errors' => true,
-                'timeout' => 10
-            ]
-        ]);
-        
-        $result = @file_get_contents($url, false, $context);
-        return $result !== false;
+        return setFirebaseData("driver_commissions/{$driverId}", $driverData);
 
     } catch (Exception $e) {
         error_log("Error updating driver commission: " . $e->getMessage());
@@ -684,7 +1017,7 @@ function getAvailableBookingsForDriver($driverId) {
             $status = strtolower($booking['status'] ?? '');
             $assignedDriverId = $booking['driverId'] ?? null;
             
-            if ($status !== 'pending' || $assignedDriverId !== null) {
+            if ($status !== 'pending' || ($assignedDriverId !== null && $assignedDriverId !== '')) {
                 continue;
             }
             

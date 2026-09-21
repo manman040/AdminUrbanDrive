@@ -2,11 +2,7 @@
 session_start();
 require_once 'firebase-config.php';
 
-// Protect page
-if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
-	header('Location: index.php');
-	exit;
-}
+requireAdminSession();
 
 // Configurable commission rate (company cut)
 $companyCommissionRate = 20; // percent
@@ -29,106 +25,97 @@ try {
 	$commissionPayments = [];
 }
 
-// Calculate actual paid amounts from commission_payment table
-// Also track which jobs are paid using FIFO (First-In-First-Out) allocation
-$actualPaidByDriver = [];
-$paidJobIdsByDriver = []; // Track which booking IDs are paid for each driver
+// Payments made by the driver (ToyyibPay through the app, or recorded here by
+// an admin). Each record carries the bookingIds it covers. The app bridges a
+// "pending" record to its "paid" confirmation through the shared billCode, so
+// do the same here or the app and this page disagree on what is paid.
+$paidBookingIdsByDriver = [];       // driverId => [bookingId => true]
+$unallocatedPaidCentsByDriver = []; // legacy paid records that carry no ride ids
 
 if (is_array($commissionPayments)) {
 	foreach ($commissionPayments as $driverId => $payments) {
 		if (!is_array($payments)) continue;
-		
-		$totalPaidForDriver = 0.0;
-		$paidJobIds = []; // Booking IDs that have been paid
-		
-		// Sort payments by date (oldest first) for FIFO allocation
-		$sortedPayments = [];
-		foreach ($payments as $paymentId => $payment) {
+
+		$paidBillCodes = [];
+		foreach ($payments as $payment) {
 			if (!is_array($payment)) continue;
-			$status = strtolower($payment['status'] ?? '');
-			// The app also accepts 'success'/'completed' as paid-equivalent statuses,
-			// so this must match or a driver's outstanding balance disagrees between
-			// the app and this dashboard for the exact same payment record.
-			if (in_array($status, ['paid', 'success', 'completed'], true)) {
-				$paymentTime = $payment['paid_at'] ?? $payment['created_at'] ?? $payment['timestamp'] ?? 0;
-				if (is_array($paymentTime)) {
-					$paymentTime = $paymentTime['time'] ?? 0;
-				}
-				$sortedPayments[] = [
-					'id' => $paymentId,
-					'amount' => floatval($payment['amount'] ?? 0),
-					'time' => $paymentTime,
-					'job_ids' => $payment['job_ids'] ?? $payment['booking_ids'] ?? [] // If payment already has job IDs
-				];
+			$status = strtolower((string) ($payment['status'] ?? ($payment['paymentStatus'] ?? '')));
+			$billCode = (string) ($payment['billCode'] ?? '');
+			if (in_array($status, ['paid', 'success', 'completed'], true) && $billCode !== '') {
+				$paidBillCodes[$billCode] = true;
 			}
 		}
-		
-		// Sort by time (oldest first)
-		usort($sortedPayments, function($a, $b) {
-			return $a['time'] <=> $b['time'];
-		});
-		
-		foreach ($sortedPayments as $payment) {
-			$amount = $payment['amount'];
-			$totalPaidForDriver += $amount;
-			
-			// If payment already has job_ids, use them
-			if (!empty($payment['job_ids']) && is_array($payment['job_ids'])) {
-				foreach ($payment['job_ids'] as $jobId) {
-					$paidJobIds[$jobId] = true;
+
+		$paidIds = [];
+		$unallocatedCents = 0;
+		foreach ($payments as $payment) {
+			if (!is_array($payment)) continue;
+			$status = strtolower((string) ($payment['status'] ?? ($payment['paymentStatus'] ?? '')));
+			$billCode = (string) ($payment['billCode'] ?? '');
+			$statusIsPaid = in_array($status, ['paid', 'success', 'completed'], true);
+			$isPaid = $statusIsPaid || ($billCode !== '' && isset($paidBillCodes[$billCode]));
+			if (!$isPaid) continue;
+
+			$ids = $payment['bookingIds'] ?? ($payment['booking_ids'] ?? ($payment['job_ids'] ?? null));
+			if (isset($payment['bookingId']) && is_string($payment['bookingId']) && $payment['bookingId'] !== '') {
+				$ids = is_array($ids) ? array_merge($ids, [$payment['bookingId']]) : [$payment['bookingId']];
+			}
+			if (is_array($ids) && !empty($ids)) {
+				foreach ($ids as $id) {
+					$id = trim((string) $id);
+					if ($id !== '') $paidIds[$id] = true;
 				}
+			} elseif ($statusIsPaid) {
+				// Old-style record without ride ids: spread its amount oldest-first below.
+				$unallocatedCents += (int) round(floatval($payment['amount'] ?? 0) * 100);
 			}
 		}
-		
-		if ($totalPaidForDriver > 0) {
-			$actualPaidByDriver[$driverId] = $totalPaidForDriver;
-			$paidJobIdsByDriver[$driverId] = $paidJobIds;
-		}
+
+		$paidBookingIdsByDriver[$driverId] = $paidIds;
+		$unallocatedPaidCentsByDriver[$driverId] = $unallocatedCents;
 	}
 }
 
-// Fetch active drivers to filter out deleted ones
-$activeDrivers = [];
+// Driver records: names, and to hide drivers that were deleted.
+$driversData = [];
 try {
 	$driversData = getFirebaseData('drivers');
-	if (is_array($driversData)) {
-		$activeDrivers = array_keys($driversData);
-	}
+	if (!is_array($driversData)) $driversData = [];
 } catch (Exception $e) {
-	$activeDrivers = [];
+	$driversData = [];
 }
+$activeDrivers = array_keys($driversData);
 
-// Fetch bookings to count actual jobs per driver, and to compute each driver's
-// real total fare/commission live from completed rides. The driver_commissions
-// aggregate (commission_summary.total_earnings/total_commission) is only ever
-// written once, when the driver is approved -- the app never updates it as rides
-// complete, so it goes stale. Bookings is the source of truth instead.
-$driverJobCounts = [];
-$driverFareTotals = [];
+// Jobs come straight from completed bookings -- the same source the app's
+// Total Earning screen uses -- not from driver_commissions/recent_jobs, which
+// the app never writes (it was only ever filled by admin-side scripts).
+$driverJobs = [];
 try {
 	$bookings = getFirebaseData('bookings');
 	if (is_array($bookings)) {
 		foreach ($bookings as $bookingId => $booking) {
 			if (!is_array($booking)) continue;
-			$status = strtolower($booking['status'] ?? '');
-			// Only count completed/confirmed bookings
-			if (in_array($status, ['completed', 'confirmed', 'finished', 'done'])) {
-				$driverId = $booking['driverId'] ?? null;
-				if ($driverId) {
-					if (!isset($driverJobCounts[$driverId])) {
-						$driverJobCounts[$driverId] = 0;
-						$driverFareTotals[$driverId] = 0.0;
-					}
-					$driverJobCounts[$driverId]++;
-					$driverFareTotals[$driverId] += bookingFareAmount($booking);
-				}
-			}
+			if (normalizeBookingStatus($booking['status'] ?? '') !== 'completed') continue;
+			$driverId = trim((string) ($booking['driverId'] ?? ''));
+			if ($driverId === '') continue;
+			$fare = bookingFareAmount($booking);
+			$completedMs = (int) firebaseTimestampValue($booking['completedAt'] ?? ($booking['updatedAt'] ?? ($booking['createdAt'] ?? 0)));
+			if ($completedMs > 0 && $completedMs < 10000000000) $completedMs *= 1000;
+			$driverJobs[$driverId][] = [
+				'booking_id' => (string) $bookingId,
+				'fare_amount' => $fare,
+				'commission_amount' => round(($fare * $companyCommissionRate) / 100, 2),
+				'completed_at' => $completedMs,
+				'job_date' => $completedMs > 0 ? date('Y-m-d', (int) floor($completedMs / 1000)) : '',
+				'pickup' => (string) firstBookingValue($booking, ['pickupAddress', 'pickupLocation']),
+				'dropoff' => (string) firstBookingValue($booking, ['dropoffAddress', 'dropoffLocation']),
+				'status' => 'unpaid',
+				'paid_date' => null,
+			];
 		}
 	}
 } catch (Exception $e) {
-	// If bookings fetch fails, job counts will remain empty
-	$driverJobCounts = [];
-	$driverFareTotals = [];
+	$driverJobs = [];
 }
 
 // Process driver commissions data
@@ -137,141 +124,91 @@ $totalCommissionCents = 0;
 $totalPaidCents = 0;
 $totalUnpaidCents = 0;
 
-if (is_array($driverCommissionsData)) {
-	foreach ($driverCommissionsData as $driverId => $data) {
-		// Skip commissions for drivers that no longer exist
-		if (!empty($activeDrivers) && !in_array($driverId, $activeDrivers, true)) {
-			continue;
-		}
-		$driverInfo = $data['driver_info'] ?? [];
-		$recentJobs = $data['recent_jobs'] ?? [];
-
-		$driverName = $driverInfo['driver_name'] ?? 'Unknown Driver';
-		// Computed live from completed bookings -- see comment above $driverFareTotals.
-		$totalFare = floatval($driverFareTotals[$driverId] ?? 0);
-		$totalCommissionAmount = $totalFare * ($companyCommissionRate / 100);
-		$totalCommissionForDriverCents = (int) round($totalCommissionAmount * 100);
-		
-		// Get actual paid amount from commission_payment table
-		$paidCommissionRaw = isset($actualPaidByDriver[$driverId]) ? $actualPaidByDriver[$driverId] : 0.0;
-		$paidCommissionCents = (int) round($paidCommissionRaw * 100);
-		if ($paidCommissionCents > $totalCommissionForDriverCents && $totalCommissionForDriverCents > 0) {
-			$paidCommissionCents = $totalCommissionForDriverCents;
-		}
-		
-		// Calculate unpaid in cents to avoid floating point jitter
-		$unpaidCommissionCentsForDriver = max($totalCommissionForDriverCents - $paidCommissionCents, 0);
-		
-		// Allocate payments to jobs using FIFO (if not already allocated in payment records)
-		$paidJobIds = $paidJobIdsByDriver[$driverId] ?? [];
-		$remainingPaymentCents = $paidCommissionCents;
-		
-		// Sort jobs by date (oldest first) for FIFO allocation
-		$jobsArray = [];
-		foreach ($recentJobs as $jobKey => $job) {
-			$jobDate = 0;
-			if (isset($job['job_date'])) {
-				$jobDate = is_numeric($job['job_date']) ? $job['job_date'] : strtotime($job['job_date']);
-			} elseif (isset($job['completed_at'])) {
-				$completedAt = $job['completed_at'];
-				if (is_array($completedAt)) {
-					$jobDate = $completedAt['time'] ?? 0;
-				} elseif (is_numeric($completedAt)) {
-					$jobDate = $completedAt;
-				}
-			}
-			$jobsArray[] = [
-				'key' => $jobKey,
-				'job' => $job,
-				'date' => $jobDate
-			];
-		}
-		usort($jobsArray, function($a, $b) {
-			return $a['date'] <=> $b['date'];
-		});
-		
-		// Allocate payments to jobs (FIFO)
-		$processedJobs = [];
-		foreach ($jobsArray as $jobItem) {
-			$job = $jobItem['job'];
-			$bookingId = $job['booking_id'] ?? $jobItem['key'] ?? '';
-			$jobCommissionCents = (int) round((floatval($job['commission_amount'] ?? 0)) * 100);
-			
-			// Check if this job is already marked as paid in payment records
-			if (!empty($paidJobIds) && isset($paidJobIds[$bookingId])) {
-				$job['status'] = 'paid';
-				$job['paid_date'] = $job['paid_date'] ?? date('Y-m-d');
-			} elseif ($remainingPaymentCents > 0 && $jobCommissionCents > 0) {
-				// Allocate payment to this job
-				if ($remainingPaymentCents >= $jobCommissionCents) {
-					$job['status'] = 'paid';
-					$job['paid_date'] = $job['paid_date'] ?? date('Y-m-d');
-					$remainingPaymentCents -= $jobCommissionCents;
-				} else {
-					// Partial payment - mark as partially paid
-					$job['status'] = 'partial';
-					$remainingPaymentCents = 0;
-				}
-			} else {
-				// No payment left, job remains unpaid
-				$job['status'] = $job['status'] ?? 'unpaid';
-			}
-			
-			$processedJobs[$jobItem['key']] = $job;
-		}
-		
-		// Calculate job count: prefer bookings count (source of truth), but use recent_jobs count if it's higher
-		// This handles cases where recent_jobs might have more jobs than what's currently in bookings
-		$bookingsJobCount = isset($driverJobCounts[$driverId]) ? $driverJobCounts[$driverId] : 0;
-		$recentJobsCount = count($processedJobs);
-		
-		// Use the higher count to ensure accuracy
-		// If recent_jobs is populated, it's likely more accurate for historical data
-		// If recent_jobs is empty but we have commission, use bookings count
-		if ($recentJobsCount > 0) {
-			$jobCount = max($recentJobsCount, $bookingsJobCount);
-		} else {
-			// If recent_jobs is empty, use bookings count
-			$jobCount = $bookingsJobCount;
-		}
-		
-		// Get payment deadline
-		$paymentDeadline = $data['payment_deadline'] ?? null;
-		$deadlineTimestamp = null;
-		$deadlineDate = null;
-		$isOverdue = false;
-		
-		if ($paymentDeadline && is_array($paymentDeadline)) {
-			$deadlineTimestamp = $paymentDeadline['time'] ?? null;
-			$deadlineDate = $paymentDeadline['date'] ?? null;
-			
-			// Check if overdue (only if there's unpaid commission)
-			if ($deadlineTimestamp && $unpaidCommissionCentsForDriver > 0) {
-				$currentTime = time() * 1000; // Current time in milliseconds
-				$isOverdue = $currentTime > $deadlineTimestamp;
-			}
-		}
-		
-		$driverCommissions[$driverId] = [
-			'driver_id' => $driverId,
-			'driver_name' => $driverName,
-			'jobs' => $processedJobs,
-			'total_fare' => $totalFare,
-			'total_commission' => $totalCommissionForDriverCents / 100,
-			'paid_commission' => $paidCommissionCents / 100,
-			'unpaid_commission' => $unpaidCommissionCentsForDriver / 100,
-			'job_count' => $jobCount,
-			'payment_deadline' => [
-				'timestamp' => $deadlineTimestamp,
-				'date' => $deadlineDate,
-				'is_overdue' => $isOverdue
-			]
-		];
-		
-		$totalCommissionCents += $totalCommissionForDriverCents;
-		$totalPaidCents += $paidCommissionCents;
-		$totalUnpaidCents += $unpaidCommissionCentsForDriver;
+$driverIds = array_unique(array_merge(
+	array_keys($driverJobs),
+	is_array($driverCommissionsData) ? array_keys($driverCommissionsData) : []
+));
+foreach ($driverIds as $driverId) {
+	// Skip drivers that no longer exist
+	if (!empty($activeDrivers) && !in_array($driverId, $activeDrivers, true)) {
+		continue;
 	}
+	$data = (is_array($driverCommissionsData) && isset($driverCommissionsData[$driverId]) && is_array($driverCommissionsData[$driverId]))
+		? $driverCommissionsData[$driverId]
+		: [];
+	$driverInfo = $data['driver_info'] ?? [];
+	$driverName = trim((string) ($driversData[$driverId]['name'] ?? ''));
+	if ($driverName === '') {
+		$driverName = (string) ($driverInfo['driver_name'] ?? 'Unknown Driver');
+	}
+
+	$jobs = $driverJobs[$driverId] ?? [];
+	usort($jobs, function ($a, $b) { return $a['completed_at'] <=> $b['completed_at']; }); // oldest first
+
+	$paidIds = $paidBookingIdsByDriver[$driverId] ?? [];
+	$remainingCents = $unallocatedPaidCentsByDriver[$driverId] ?? 0;
+
+	$totalCommissionForDriverCents = 0;
+	$paidCommissionCents = 0;
+	$totalFare = 0.0;
+	$processedJobs = [];
+	foreach ($jobs as $job) {
+		$jobCents = (int) round($job['commission_amount'] * 100);
+		$totalCommissionForDriverCents += $jobCents;
+		$totalFare += $job['fare_amount'];
+		if (isset($paidIds[$job['booking_id']])) {
+			$job['status'] = 'paid';
+			$paidCommissionCents += $jobCents;
+		} elseif ($jobCents > 0 && $remainingCents >= $jobCents) {
+			$job['status'] = 'paid';
+			$paidCommissionCents += $jobCents;
+			$remainingCents -= $jobCents;
+		} elseif ($jobCents > 0 && $remainingCents > 0) {
+			$job['status'] = 'partial';
+			$paidCommissionCents += $remainingCents;
+			$remainingCents = 0;
+		}
+		$processedJobs[$job['booking_id']] = $job;
+	}
+	$unpaidCommissionCentsForDriver = max($totalCommissionForDriverCents - $paidCommissionCents, 0);
+	$jobCount = count($jobs);
+
+	// Get payment deadline
+	$paymentDeadline = $data['payment_deadline'] ?? null;
+	$deadlineTimestamp = null;
+	$deadlineDate = null;
+	$isOverdue = false;
+
+	if ($paymentDeadline && is_array($paymentDeadline)) {
+		$deadlineTimestamp = $paymentDeadline['time'] ?? null;
+		$deadlineDate = $paymentDeadline['date'] ?? null;
+
+		// Check if overdue (only if there's unpaid commission)
+		if ($deadlineTimestamp && $unpaidCommissionCentsForDriver > 0) {
+			$currentTime = time() * 1000; // Current time in milliseconds
+			$isOverdue = $currentTime > $deadlineTimestamp;
+		}
+	}
+
+	$driverCommissions[$driverId] = [
+		'driver_id' => $driverId,
+		'driver_name' => $driverName,
+		'jobs' => $processedJobs,
+		'total_fare' => $totalFare,
+		'total_commission' => $totalCommissionForDriverCents / 100,
+		'paid_commission' => $paidCommissionCents / 100,
+		'unpaid_commission' => $unpaidCommissionCentsForDriver / 100,
+		'job_count' => $jobCount,
+		'payment_deadline' => [
+			'timestamp' => $deadlineTimestamp,
+			'date' => $deadlineDate,
+			'is_overdue' => $isOverdue
+		]
+	];
+
+	$totalCommissionCents += $totalCommissionForDriverCents;
+	$totalPaidCents += $paidCommissionCents;
+	$totalUnpaidCents += $unpaidCommissionCentsForDriver;
 }
 
 // Convert to array for display
@@ -523,6 +460,10 @@ function rm($n) { return 'RM ' . number_format((float)$n, 2); }
 				<i class="fas fa-tachometer-alt"></i>
 				Rides Management
 			</a>
+			<a href="rides-management.php" class="nav-item">
+			    <i class="fas fa-route"></i>
+			    All Rides
+			</a>
 			<a href="driver-requests.php" class="nav-item">
 				<i class="fas fa-user-plus"></i>
 				Driver Request
@@ -647,6 +588,11 @@ function rm($n) { return 'RM ' . number_format((float)$n, 2); }
 								?>
 							</td>
 							<td>
+								<?php if ($driver['unpaid_commission'] > 0.009): ?>
+								<button class="action-btn pay-btn" onclick="recordPayment('<?php echo $driver['driver_id']; ?>', '<?php echo htmlspecialchars($driver['driver_name']); ?>')">
+									<i class="fas fa-hand-holding-usd"></i> Record Payment
+								</button>
+								<?php endif; ?>
 								<button class="action-btn deadline-btn" onclick="setPaymentDeadline('<?php echo $driver['driver_id']; ?>', '<?php echo htmlspecialchars($driver['driver_name']); ?>', <?php echo $deadline ? ($deadline['timestamp'] ?? 'null') : 'null'; ?>)">
 									<i class="fas fa-calendar-alt"></i> Set Deadline
 								</button>
@@ -694,6 +640,58 @@ function rm($n) { return 'RM ' . number_format((float)$n, 2); }
 						<tbody></tbody>
 					</table>
 					<div class="table-pager" id="jobsPager"></div>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<!-- Modal for recording a commission payment received outside ToyyibPay -->
+	<div id="paymentModalOverlay" class="drawer-overlay" onclick="closePaymentModal(event)">
+		<div id="paymentModal" class="drawer" style="max-width:520px;" onclick="event.stopPropagation()">
+			<div class="drawer-header">
+				<h2 id="paymentModalTitle">Record Payment</h2>
+				<button class="close-btn" onclick="closePaymentModal(event)"><i class="fas fa-times"></i></button>
+			</div>
+			<div class="drawer-body">
+				<div style="margin-bottom:16px;">
+					<label style="display:block;margin-bottom:8px;font-weight:600;color:#1e293b;">Driver:</label>
+					<div id="paymentDriverName" style="padding:12px;background:#f8fafc;border-radius:8px;color:#1e293b;font-weight:600;"></div>
+				</div>
+				<div style="margin-bottom:16px;">
+					<label style="display:block;margin-bottom:8px;font-weight:600;color:#1e293b;">Unpaid rides (untick any that are not being paid now):</label>
+					<div id="paymentJobList" style="max-height:220px;overflow:auto;border:2px solid #e2e8f0;border-radius:8px;padding:8px 12px;"></div>
+				</div>
+				<div style="display:flex;gap:12px;margin-bottom:16px;">
+					<div style="flex:1;">
+						<label style="display:block;margin-bottom:8px;font-weight:600;color:#1e293b;">Amount (RM):</label>
+						<input type="number" id="paymentAmount" step="0.01" min="0" style="width:100%;padding:10px;border:2px solid #e2e8f0;border-radius:8px;font-size:14px;">
+					</div>
+					<div style="flex:1;">
+						<label style="display:block;margin-bottom:8px;font-weight:600;color:#1e293b;">Method:</label>
+						<select id="paymentMethod" style="width:100%;padding:10px;border:2px solid #e2e8f0;border-radius:8px;font-size:14px;">
+							<option value="cash">Cash</option>
+							<option value="bank_transfer">Bank transfer</option>
+							<option value="qr">QR / DuitNow</option>
+							<option value="other">Other</option>
+						</select>
+					</div>
+				</div>
+				<div style="margin-bottom:16px;">
+					<label style="display:block;margin-bottom:8px;font-weight:600;color:#1e293b;">Note (optional):</label>
+					<input type="text" id="paymentNote" placeholder="e.g. receipt number" style="width:100%;padding:10px;border:2px solid #e2e8f0;border-radius:8px;font-size:14px;">
+				</div>
+				<div style="margin-bottom:20px;padding:12px;background:#ecfdf5;border-radius:8px;border-left:4px solid #10b981;">
+					<small style="color:#065f46;">
+						<i class="fas fa-info-circle"></i> Saved to the same place the app's ToyyibPay payments go, so the selected rides show as paid in the driver's app immediately.
+					</small>
+				</div>
+				<div style="display:flex;gap:12px;">
+					<button class="action-btn pay-btn" onclick="submitPayment()" style="flex:1;">
+						<i class="fas fa-check"></i> Save Payment
+					</button>
+					<button class="action-btn" onclick="closePaymentModal(event)" style="flex:1;background:#e2e8f0;color:#1e293b;">
+						Cancel
+					</button>
 				</div>
 			</div>
 		</div>
@@ -868,6 +866,81 @@ function rm($n) { return 'RM ' . number_format((float)$n, 2); }
 		const drawer = document.getElementById('jobsDrawer');
 		drawer.classList.remove('active');
 		setTimeout(() => overlay.classList.remove('active'), 200);
+	}
+
+	// Manual commission payment (cash / transfer received outside ToyyibPay)
+	let paymentDriverId = null;
+
+	function recordPayment(driverId, driverName) {
+		paymentDriverId = driverId;
+		document.getElementById('paymentModalTitle').textContent = `Record Payment — ${driverName}`;
+		document.getElementById('paymentDriverName').textContent = driverName;
+
+		const list = document.getElementById('paymentJobList');
+		const jobs = (driverJobsById[driverId] || []).filter(j => (j.status || 'unpaid') !== 'paid');
+		list.innerHTML = jobs.length ? '' : '<span style="color:#94a3b8;">No unpaid rides</span>';
+		jobs.forEach(j => {
+			const id = j.booking_id || '';
+			const label = document.createElement('label');
+			label.style.cssText = 'display:flex;gap:10px;align-items:center;padding:6px 0;font-size:13px;cursor:pointer;';
+			label.innerHTML = `<input type="checkbox" class="payment-job" value="${escapeHtml(id)}" data-amount="${toNumber(j.commission_amount)}" checked>
+				<span style="flex:1;">${escapeHtml(j.job_date || '')} &middot; ${escapeHtml(id)}</span>
+				<strong>${formatRM(j.commission_amount)}</strong>`;
+			list.appendChild(label);
+		});
+		list.querySelectorAll('.payment-job').forEach(cb => cb.addEventListener('change', updatePaymentAmount));
+		updatePaymentAmount();
+		document.getElementById('paymentNote').value = '';
+
+		const overlay = document.getElementById('paymentModalOverlay');
+		const modal = document.getElementById('paymentModal');
+		overlay.classList.add('active');
+		setTimeout(() => modal.classList.add('active'), 10);
+	}
+
+	function updatePaymentAmount() {
+		let total = 0;
+		document.querySelectorAll('.payment-job:checked').forEach(cb => { total += toNumber(cb.dataset.amount); });
+		document.getElementById('paymentAmount').value = total.toFixed(2);
+	}
+
+	function closePaymentModal(e) {
+		const overlay = document.getElementById('paymentModalOverlay');
+		const modal = document.getElementById('paymentModal');
+		modal.classList.remove('active');
+		setTimeout(() => overlay.classList.remove('active'), 200);
+		paymentDriverId = null;
+	}
+
+	function submitPayment() {
+		if (!paymentDriverId) return;
+		const bookingIds = Array.from(document.querySelectorAll('.payment-job:checked')).map(cb => cb.value);
+		if (bookingIds.length === 0) {
+			alert('Select at least one ride');
+			return;
+		}
+		const amount = parseFloat(document.getElementById('paymentAmount').value || '0');
+		fetch('commission-mark-paid.php', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				driverId: paymentDriverId,
+				bookingIds: bookingIds,
+				amount: amount,
+				method: document.getElementById('paymentMethod').value,
+				note: document.getElementById('paymentNote').value
+			})
+		})
+		.then(response => response.json())
+		.then(data => {
+			if (data.success) {
+				alert(data.message || 'Payment recorded');
+				location.reload();
+			} else {
+				alert('Error: ' + (data.message || 'Failed to record payment'));
+			}
+		})
+		.catch(() => alert('Error recording payment. Please try again.'));
 	}
 
 	// Payment Deadline Functions

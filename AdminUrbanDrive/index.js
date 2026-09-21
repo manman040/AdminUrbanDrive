@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
+import admin from 'firebase-admin';
 dotenv.config();
 
 const app = express();
@@ -12,6 +13,35 @@ app.use(express.urlencoded({ extended: true }));
 const TOYYIB_BASE = process.env.TOYYIBPAY_BASE || 'https://dev.toyyibpay.com';
 const FIREBASE_DB_URL = process.env.FIREBASE_DB_URL ||
   'https://drive-ab344-default-rtdb.asia-southeast1.firebasedatabase.app/';
+
+// The database rules no longer allow unauthenticated writes, so this backend
+// signs in with a Firebase service account (the Admin SDK bypasses the rules).
+// Set FIREBASE_SERVICE_ACCOUNT to the full contents of the service-account
+// JSON file (Render: Environment -> add variable, paste the JSON as-is).
+function initFirebase() {
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
+  if (raw) {
+    let serviceAccount;
+    try {
+      serviceAccount = JSON.parse(raw);
+    } catch (e) {
+      throw new Error('FIREBASE_SERVICE_ACCOUNT is not valid JSON: ' + e.message);
+    }
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      databaseURL: FIREBASE_DB_URL,
+    });
+    return;
+  }
+  // Falls back to GOOGLE_APPLICATION_CREDENTIALS / the GCP metadata server.
+  console.warn('FIREBASE_SERVICE_ACCOUNT not set; trying application default credentials');
+  admin.initializeApp({
+    credential: admin.credential.applicationDefault(),
+    databaseURL: FIREBASE_DB_URL,
+  });
+}
+initFirebase();
+const db = admin.database();
 
 app.get('/', (_req, res) => res.json({ ok: true, service: 'ToyyibPay backend' }));
 
@@ -91,6 +121,20 @@ app.get('/api/toyyibpay/success', (req, res) => {
   `);
 });
 
+// ToyyibPay callbacks are plain unsigned POSTs, so anyone who knows a bill
+// code could otherwise mark it paid. Ask ToyyibPay whether the bill really
+// has a successful transaction before trusting the callback. Set
+// TOYYIBPAY_VERIFY_CALLBACK=false to skip (sandbox troubleshooting only).
+async function verifyBillPaid(billCode) {
+  if (String(process.env.TOYYIBPAY_VERIFY_CALLBACK).toLowerCase() === 'false') return true;
+  const form = new URLSearchParams({ billCode, billpaymentStatus: '1' });
+  const r = await fetch(`${TOYYIB_BASE}/index.php/api/getBillTransactions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: form
+  });
+  const data = await r.json();
+  return Array.isArray(data) && data.some(t => String(t.billpaymentStatus) === '1');
+}
+
 // status_id === '1' means PAID. Finds the commission_payment record whose
 // billCode matches this callback and marks it paid, so the driver's
 // outstanding commission actually clears once ToyyibPay confirms payment.
@@ -101,8 +145,14 @@ app.post('/api/toyyibpay/callback', async (req, res) => {
     const billCode = req.body.billcode ?? req.body.billCode;
 
     if (String(statusId) === '1' && billCode) {
-      const paymentsRes = await fetch(`${FIREBASE_DB_URL}commission_payment.json`);
-      const allPayments = await paymentsRes.json();
+      const paid = await verifyBillPaid(billCode);
+      if (!paid) {
+        console.warn(`Callback for bill ${billCode} claims paid but ToyyibPay shows no successful transaction; ignoring`);
+        return res.send('OK');
+      }
+
+      const snapshot = await db.ref('commission_payment').once('value');
+      const allPayments = snapshot.val();
 
       if (allPayments && typeof allPayments === 'object') {
         for (const driverId of Object.keys(allPayments)) {
@@ -111,15 +161,12 @@ app.post('/api/toyyibpay/callback', async (req, res) => {
 
           for (const paymentId of Object.keys(driverPayments)) {
             const payment = driverPayments[paymentId];
-            if (payment && payment.billCode === billCode) {
-              await fetch(
-                `${FIREBASE_DB_URL}commission_payment/${driverId}/${paymentId}.json`,
-                {
-                  method: 'PATCH',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ status: 'paid', paid_at: Date.now() }),
-                }
-              );
+            if (payment && payment.billCode === billCode && payment.status !== 'paid') {
+              await db.ref(`commission_payment/${driverId}/${paymentId}`).update({
+                status: 'paid',
+                paid_at: Date.now(),
+                paid_via: 'toyyibpay_callback',
+              });
               console.log(`Marked commission_payment/${driverId}/${paymentId} as paid`);
             }
           }
@@ -127,9 +174,10 @@ app.post('/api/toyyibpay/callback', async (req, res) => {
       }
     }
   } catch (e) {
+    // A 500 makes ToyyibPay retry the webhook later instead of dropping it.
     console.error('ToyyibPay callback processing failed:', e);
+    return res.status(500).send('ERROR');
   }
-  // Always acknowledge -- ToyyibPay retries the webhook if it doesn't get "OK".
   res.send('OK');
 });
 

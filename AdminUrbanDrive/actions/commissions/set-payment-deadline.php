@@ -2,90 +2,75 @@
 session_start();
 require_once 'firebase-config.php';
 
-// Check if user is logged in
-if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
-    http_response_code(401);
-    echo json_encode(['success' => false, 'message' => 'Unauthorized']);
-    exit;
-}
-
+requireAdminSession(true);
 header('Content-Type: application/json');
 
-// Get JSON input
+// Sets or removes driver_commissions/{driverId}/payment_deadline -- the node
+// the driver's Total Earning screen watches.
+//
+// Removal used to unset the key locally and PATCH the parent back, but PATCH
+// only merges and can never delete a key, so the deadline silently stayed.
+// It is now a real DELETE of that one path. Note the app re-creates a fresh
+// 24-hour deadline on its own whenever the driver still owes commission and
+// none is set, so "remove" only sticks once the balance is cleared.
+
 $input = json_decode(file_get_contents('php://input'), true);
 
-if (!$input || !isset($input['driverId'])) {
+if (!$input || empty($input['driverId'])) {
     http_response_code(400);
     echo json_encode(['success' => false, 'message' => 'Missing required field: driverId']);
     exit;
 }
 
-$driverId = $input['driverId'];
-$deadlineTimestamp = null;
+$driverId = trim((string) $input['driverId']);
 $deadlineDate = $input['deadlineDate'] ?? null;
 $deadlineTime = $input['deadlineTime'] ?? null;
+$deadlineTimestamp = null;
 
-// If deadlineDate is provided, convert to timestamp
 if ($deadlineDate) {
-    // If time is also provided, combine them
-    if ($deadlineTime) {
-        $datetimeString = $deadlineDate . ' ' . $deadlineTime;
-    } else {
-        $datetimeString = $deadlineDate . ' 23:59:59'; // Default to end of day
-    }
-    
-    $deadlineTimestamp = strtotime($datetimeString);
-    if ($deadlineTimestamp === false) {
+    $datetimeString = $deadlineDate . ' ' . ($deadlineTime ? $deadlineTime : '23:59:59');
+    $parsed = strtotime($datetimeString);
+    if ($parsed === false) {
         http_response_code(400);
         echo json_encode(['success' => false, 'message' => 'Invalid date/time format']);
         exit;
     }
-    
-    // Convert to milliseconds for Firebase timestamp format
-    $deadlineTimestamp = $deadlineTimestamp * 1000;
-} else {
-    // If no date provided, remove the deadline
-    $deadlineTimestamp = null;
+    $deadlineTimestamp = $parsed * 1000; // Firebase timestamps are milliseconds
 }
 
 try {
-    // Get current driver commission data
-    $driverCommissionData = getFirebaseData('driver_commissions/' . $driverId);
-    
-    if (!is_array($driverCommissionData)) {
-        $driverCommissionData = [];
-    }
-    
-    // Update payment deadline
+    $path = 'driver_commissions/' . $driverId;
+
     if ($deadlineTimestamp !== null) {
-        $driverCommissionData['payment_deadline'] = [
+        $deadline = [
             'time' => $deadlineTimestamp,
             'date' => date('Y-m-d H:i:s', firebaseTimestampToSeconds($deadlineTimestamp)),
             'set_by' => $_SESSION['admin_username'] ?? 'admin',
-            'set_at' => time() * 1000
+            'set_at' => time() * 1000,
         ];
-    } else {
-        // Remove deadline if null
-        if (isset($driverCommissionData['payment_deadline'])) {
-            unset($driverCommissionData['payment_deadline']);
+        // PATCH only this key; the rest of the driver's commission record is untouched.
+        $ok = updateFirebaseData($path, ['payment_deadline' => $deadline]);
+        if (!$ok) {
+            throw new Exception('Failed to update Firebase: ' . firebaseLastError());
         }
-    }
-    
-    // Update in Firebase
-    $result = updateFirebaseData('driver_commissions/' . $driverId, $driverCommissionData);
-    
-    if ($result) {
+        pushAppNotification($driverId, true, 'Commission payment deadline', 'Please settle your outstanding commission by ' . date('d M Y, h:i A', firebaseTimestampToSeconds($deadlineTimestamp)) . '.');
         echo json_encode([
             'success' => true,
-            'message' => $deadlineTimestamp ? 'Payment deadline set successfully' : 'Payment deadline removed successfully',
-            'deadline' => $deadlineTimestamp ? [
-                'time' => $deadlineTimestamp,
-                'date' => date('Y-m-d H:i:s', firebaseTimestampToSeconds($deadlineTimestamp))
-            ] : null
+            'message' => 'Payment deadline set successfully',
+            'deadline' => ['time' => $deadlineTimestamp, 'date' => $deadline['date']]
         ]);
-    } else {
-        throw new Exception('Failed to update Firebase');
+        exit;
     }
+
+    $ok = deleteFirebaseData($path . '/payment_deadline');
+    if (!$ok) {
+        throw new Exception('Failed to update Firebase: ' . firebaseLastError());
+    }
+    echo json_encode([
+        'success' => true,
+        'message' => 'Payment deadline removed successfully',
+        'deadline' => null
+    ]);
 } catch (Exception $e) {
     http_response_code(500);
     echo json_encode([
@@ -93,5 +78,3 @@ try {
         'message' => 'Error setting payment deadline: ' . $e->getMessage()
     ]);
 }
-?>
-

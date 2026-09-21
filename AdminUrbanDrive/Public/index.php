@@ -1,3 +1,13 @@
+<?php
+// Server-side login errors (auth.php redirects back here with ?error=...).
+$loginErrors = [
+    'invalid_credentials' => 'Email or password is incorrect.',
+    'not_admin' => 'This account is not on the admin list. Ask an existing admin to add it under /admins in the Firebase database.',
+    'session_expired' => 'Your session expired. Please log in again.',
+    'not_configured' => 'Firebase is not configured on the server.',
+];
+$loginError = isset($_GET['error']) && isset($loginErrors[$_GET['error']]) ? $loginErrors[$_GET['error']] : '';
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -317,17 +327,17 @@
                     <p>Welcome back! Please login to your account.</p>
                 </div>
                 
-                <div class="error-message" id="errorMessage"></div>
+                <div class="error-message" id="errorMessage"<?php if ($loginError !== '') echo ' style="display:block"'; ?>><?php echo htmlspecialchars($loginError, ENT_QUOTES, 'UTF-8'); ?></div>
                 
                 <form id="loginForm" method="POST" action="auth.php">
                     <div class="form-group">
-                        <label for="username">Username</label>
-                        <input type="text" id="username" name="username" placeholder="Enter your username" required>
+                        <label for="username">Email</label>
+                        <input type="email" id="username" name="username" placeholder="Enter your admin email" autocomplete="username" required>
                     </div>
                     
                     <div class="form-group">
                         <label for="password">Password</label>
-                        <input type="password" id="password" name="password" placeholder="Enter your password" required>
+                        <input type="password" id="password" name="password" placeholder="Enter your password" autocomplete="current-password" required>
                     </div>
                     
                     <div class="forgot-password">

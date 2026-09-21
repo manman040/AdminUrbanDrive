@@ -48,9 +48,10 @@ A comprehensive admin interface for the Urban Drive ride-hailing application bui
    # Access via: http://localhost/AdminUrbanDrive/
    ```
 
-3. **Default Login Credentials**
-   - Username: `admin` or `admin@urbandrive.com`
-   - Password: `admin123`
+3. **Login**
+   - Admins sign in with a Firebase Authentication email/password account that is
+     listed under `/admins/{uid}` in the Realtime Database. There are no built-in
+     credentials any more -- see `Docs/ADMIN_AUTH_SETUP.md`.
 
 ## Firebase Integration
 

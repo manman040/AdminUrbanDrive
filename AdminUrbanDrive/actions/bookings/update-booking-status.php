@@ -2,69 +2,93 @@
 session_start();
 require_once 'firebase-config.php';
 
-// Check if user is logged in
-if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
-    http_response_code(401);
-    echo json_encode(['success' => false, 'message' => 'Unauthorized']);
-    exit;
-}
+requireAdminSession(true);
+header('Content-Type: application/json');
 
-// Check if it's a POST request
+// Changes a booking's status from the admin panel. Only the statuses the
+// mobile app understands are accepted (see bookingStatuses() in the config);
+// anything else would make the ride vanish from the driver's and rider's screens.
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
     echo json_encode(['success' => false, 'message' => 'Method not allowed']);
     exit;
 }
 
-// Get JSON input
 $input = json_decode(file_get_contents('php://input'), true);
 
-if (!$input || !isset($input['bookingId']) || !isset($input['status'])) {
+if (!$input || empty($input['bookingId']) || !isset($input['status'])) {
     http_response_code(400);
     echo json_encode(['success' => false, 'message' => 'Missing required fields']);
     exit;
 }
 
-$bookingId = $input['bookingId'];
-$status = $input['status'];
+$bookingId = trim((string) $input['bookingId']);
+$status = normalizeBookingStatus($input['status']);
 
-// Validate status
-if (!in_array($status, ['confirmed', 'completed', 'cancelled', 'pending'])) {
+if (!in_array($status, bookingStatuses(), true)) {
     http_response_code(400);
-    echo json_encode(['success' => false, 'message' => 'Invalid status']);
+    echo json_encode([
+        'success' => false,
+        'message' => 'Invalid status. Allowed: ' . implode(', ', bookingStatuses())
+    ]);
     exit;
 }
 
 try {
-    // Update the booking status in Firebase
+    $booking = getFirebaseData('bookings/' . $bookingId);
+    if (empty($booking) || !is_array($booking)) {
+        http_response_code(404);
+        echo json_encode(['success' => false, 'message' => 'Booking not found']);
+        exit;
+    }
+
+    $previousStatus = normalizeBookingStatus($booking['status'] ?? '');
+    $now = time() * 1000;
+
     $updateData = [
         'status' => $status,
-        'updatedAt' => time() * 1000
+        'updatedAt' => $now,
+        'statusChangedBy' => 'admin',
     ];
-    
-    $success = updateFirebaseData('bookings/' . $bookingId, $updateData);
-    
-    if ($success) {
-        // If booking is marked as completed, also create commission record
-        if ($status === 'completed') {
-            $booking = getFirebaseData("bookings/{$bookingId}");
-            if ($booking) {
-                $driverId = $booking['driverId'] ?? 'unknown';
-                $fare = bookingFareAmount($booking);
-                $commissionAmount = ($fare * 20) / 100; // 20% company cut
-                
-                // Update driver commission data
-                updateDriverCommission($driverId, $bookingId, $fare, $commissionAmount, 'unpaid');
-            }
-        }
-        
-        echo json_encode(['success' => true, 'message' => 'Booking status updated successfully']);
-    } else {
-        echo json_encode(['success' => false, 'message' => 'Failed to update booking status']);
+    if ($status === 'completed' && empty($booking['completedAt'])) {
+        $updateData['completedAt'] = $now;
     }
-    
+    if ($status === 'cancelled') {
+        $updateData['cancelledBy'] = 'admin';
+    }
+
+    if (!updateFirebaseData('bookings/' . $bookingId, $updateData)) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'message' => 'Failed to update booking status: ' . firebaseLastError()]);
+        exit;
+    }
+
+    // Completing a ride from the admin side records the commission just like
+    // the app-driven flow would.
+    $driverId = trim((string) ($booking['driverId'] ?? ''));
+    if ($status === 'completed' && $previousStatus !== 'completed' && $driverId !== '') {
+        $fare = bookingFareAmount($booking);
+        updateDriverCommission($driverId, $bookingId, $fare, ($fare * 20) / 100, 'unpaid');
+    }
+
+    // Tell both parties through the same notification feeds the app uses.
+    $label = bookingStatusLabel($status);
+    $riderId = trim((string) ($booking['userId'] ?? ''));
+    if ($riderId !== '' && $status !== $previousStatus) {
+        pushAppNotification($riderId, false, 'Booking ' . strtolower($label), 'Your booking was marked "' . $label . '" by Urban Drive.', $bookingId);
+    }
+    if ($driverId !== '' && $status !== $previousStatus) {
+        pushAppNotification($driverId, true, 'Booking ' . strtolower($label), 'A booking assigned to you was marked "' . $label . '" by Urban Drive.', $bookingId);
+    }
+
+    echo json_encode([
+        'success' => true,
+        'message' => 'Booking status updated to ' . $label,
+        'status' => $status,
+        'previousStatus' => $previousStatus,
+    ]);
 } catch (Exception $e) {
     http_response_code(500);
     echo json_encode(['success' => false, 'message' => 'Server error: ' . $e->getMessage()]);
 }
-?>

@@ -11,6 +11,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 require_once 'firebase-config.php';
+requireAdminSession(true);
 
 // Get driver ID from URL parameter or POST data
 $driverId = $_GET['driver_id'] ?? $_POST['driver_id'] ?? $_GET['driverId'] ?? $_POST['driverId'] ?? null;

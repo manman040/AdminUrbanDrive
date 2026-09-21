@@ -2,26 +2,22 @@
 session_start();
 require_once 'firebase-config.php';
 
-// Check if user is logged in
-if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
-    http_response_code(401);
-    echo json_encode(['success' => false, 'message' => 'Unauthorized']);
-    exit;
-}
-
+requireAdminSession(true);
 header('Content-Type: application/json');
 
-// Check if it's a POST request
+// Saves one ride category's fares and records the change in
+// fareSettingsHistory (who, when, old -> new). The app reads fareSettings
+// directly, so the new prices apply to the next booking preview immediately.
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
     echo json_encode(['success' => false, 'message' => 'Method not allowed']);
     exit;
 }
 
-// Get JSON input
-$input = json_decode(file_get_contents('php://input'), true);
+$input = json_decode(file_get_contents('php://input'), true) ?: [];
 
-$category = $input['category'] ?? '';
+$category = (string) ($input['category'] ?? '');
 $validCategories = array_keys(fareSettingsDefaults());
 
 if (!in_array($category, $validCategories, true)) {
@@ -30,35 +26,42 @@ if (!in_array($category, $validCategories, true)) {
     exit;
 }
 
-$baseFare = isset($input['baseFare']) && is_numeric($input['baseFare']) ? (float) $input['baseFare'] : null;
-$perKm = isset($input['perKm']) && is_numeric($input['perKm']) ? (float) $input['perKm'] : null;
-$bookingFee = isset($input['bookingFee']) && is_numeric($input['bookingFee']) ? (float) $input['bookingFee'] : null;
-
-if ($baseFare === null || $perKm === null || $bookingFee === null ||
-    $baseFare < 0 || $perKm < 0 || $bookingFee < 0) {
-    http_response_code(400);
-    echo json_encode([
-        'success' => false,
-        'message' => 'Base fare, price per KM, and booking fee must all be numbers of 0 or more'
-    ]);
-    exit;
+$amounts = [];
+foreach (['baseFare', 'perKm', 'bookingFee'] as $field) {
+    $value = $input[$field] ?? null;
+    if (!is_numeric($value) || (float) $value < 0 || (float) $value > 10000) {
+        http_response_code(400);
+        echo json_encode([
+            'success' => false,
+            'message' => 'Base fare, price per KM, and booking fee must all be numbers between 0 and 10,000'
+        ]);
+        exit;
+    }
+    $amounts[$field] = round((float) $value, 2);
 }
 
 try {
-    $result = saveFareSettings($category, $baseFare, $perKm, $bookingFee);
+    $result = saveFareSettingsWithHistory(
+        $category,
+        $amounts['baseFare'],
+        $amounts['perKm'],
+        $amounts['bookingFee'],
+        $_SESSION['admin_username'] ?? 'admin'
+    );
 
-    if ($result) {
-        echo json_encode([
-            'success' => true,
-            'message' => 'Fare settings saved successfully',
-            'category' => $category,
-            'baseFare' => $baseFare,
-            'perKm' => $perKm,
-            'bookingFee' => $bookingFee
-        ]);
-    } else {
-        throw new Exception('Failed to update Firebase');
+    if (!$result['success']) {
+        throw new Exception($result['message']);
     }
+
+    echo json_encode([
+        'success' => true,
+        'message' => $result['message'],
+        'category' => $category,
+        'settings' => $result['settings'],
+        'changes' => $result['changes'],
+        'history' => $result['history'],
+        'unchanged' => empty($result['changes']),
+    ]);
 } catch (Exception $e) {
     http_response_code(500);
     echo json_encode([
@@ -66,4 +69,3 @@ try {
         'message' => 'Error saving fare settings: ' . $e->getMessage()
     ]);
 }
-?>

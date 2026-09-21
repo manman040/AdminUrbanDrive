@@ -4,10 +4,7 @@ require_once 'firebase-config.php';
 
 header('Content-Type: application/json');
 
-if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
-	echo json_encode(['success' => false, 'message' => 'Unauthorized']);
-	exit;
-}
+requireAdminSession(true);
 
 $input = json_decode(file_get_contents('php://input'), true) ?? [];
 $driverId = $input['driverId'] ?? '';

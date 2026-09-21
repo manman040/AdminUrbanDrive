@@ -2,11 +2,7 @@
 session_start();
 require_once 'firebase-config.php';
 
-// Check if user is logged in
-if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
-    header('Location: index.php');
-    exit;
-}
+requireAdminSession();
 
 // Read month/year filters from query
 $selectedMonth = isset($_GET['month']) ? intval($_GET['month']) : intval(date('n')); // 1-12
@@ -85,7 +81,7 @@ try {
             }
             
             // Status counts for pie chart
-            $status = strtolower($booking['status'] ?? 'pending');
+            $status = normalizeBookingStatus($booking['status'] ?? 'pending');
             if (isset($status_counts[$status])) {
                 $status_counts[$status]++;
             } else {
@@ -125,11 +121,11 @@ try {
     ];
     
     $status_counts = [
-        'completed' => 0, 'confirmed' => 0, 'pending' => 0, 'cancelled' => 0, 'rejected' => 0
+        'pending' => 0, 'accepted' => 0, 'arrived_pickup' => 0, 'in_progress' => 0, 'completed' => 0, 'cancelled' => 0
     ];
     
     $status_percentages = [
-        'completed' => 0, 'confirmed' => 0, 'pending' => 0, 'cancelled' => 0, 'rejected' => 0
+        'pending' => 0, 'accepted' => 0, 'arrived_pickup' => 0, 'in_progress' => 0, 'completed' => 0, 'cancelled' => 0
     ];
     
     $total_amount = 0;
@@ -936,6 +932,10 @@ foreach ($usersDataRaw as $userId => $userData) {
             <a href="dashboard.php" class="nav-item active">
                 <i class="fas fa-tachometer-alt"></i>
                 Rides Management
+            </a>
+            <a href="rides-management.php" class="nav-item">
+                <i class="fas fa-route"></i>
+                All Rides
             </a>
             <a href="driver-requests.php" class="nav-item">
                 <i class="fas fa-user-plus"></i>

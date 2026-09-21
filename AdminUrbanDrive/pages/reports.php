@@ -2,11 +2,7 @@
 session_start();
 require_once 'firebase-config.php';
 
-// Protect page
-if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
-	header('Location: index.php');
-	exit;
-}
+requireAdminSession();
 
 // Helpers
 function safe_number($v) { $n = floatval($v ?? 0); return is_finite($n) ? $n : 0.0; }
@@ -30,8 +26,8 @@ try { $commissionPayments = getFirebaseData('commission_payment') ?: []; } catch
 
 // Build metrics
 $now = time();
-$activeStatuses = ['confirmed','on_ride','in_progress','assigned','accepted','started'];
-$completedStatuses = ['completed','finish','finished','done'];
+$activeStatuses = bookingActiveStatuses();
+$completedStatuses = ['completed'];
 
 $totalActiveRides = 0;
 $totalRevenue = 0.0;
@@ -76,7 +72,7 @@ $driverRideCount = [];
 $userRideCount = [];
 
 foreach ($bookings as $id => $b) {
-	$status = strtolower($b['status'] ?? '');
+	$status = normalizeBookingStatus($b['status'] ?? '');
 	$fare = bookingFareAmount($b);
 	$driverId = $b['driverId'] ?? null;
 	$userId = $b['userId'] ?? ($b['customerId'] ?? null);
@@ -647,6 +643,10 @@ if (!empty($userRideCount)) {
 			<a href="dashboard.php" class="nav-item">
 				<i class="fas fa-tachometer-alt"></i>
 				Rides Management
+			</a>
+			<a href="rides-management.php" class="nav-item">
+			    <i class="fas fa-route"></i>
+			    All Rides
 			</a>
 			<a href="driver-requests.php" class="nav-item">
 				<i class="fas fa-user-plus"></i>

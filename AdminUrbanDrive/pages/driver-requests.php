@@ -2,11 +2,7 @@
 session_start();
 require_once 'firebase-config.php';
 
-// Check if user is logged in
-if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
-    header('Location: index.php');
-    exit;
-}
+requireAdminSession();
 
 if (!function_exists('extractTimestampFromValue')) {
     function extractTimestampFromValue($value) {
@@ -1509,6 +1505,10 @@ try {
             <a href="dashboard.php" class="nav-item">
                 <i class="fas fa-car"></i>
                 Rides Management
+            </a>
+            <a href="rides-management.php" class="nav-item">
+                <i class="fas fa-route"></i>
+                All Rides
             </a>
             <a href="driver-requests.php" class="nav-item active">
                 <i class="fas fa-user-plus"></i>

@@ -2,12 +2,7 @@
 session_start();
 require_once 'firebase-config.php';
 
-// Optional: protect behind admin session if desired
-if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
-	http_response_code(401);
-	echo json_encode(['success' => false, 'message' => 'Unauthorized']);
-	exit;
-}
+requireAdminSession(true);
 
 header('Content-Type: application/json');
 
@@ -21,9 +16,9 @@ try {
 	// Group by driver and recompute
 	$byDriver = [];
 	foreach ($bookings as $bookingId => $b) {
-		$status = strtolower($b['status'] ?? '');
+		$status = normalizeBookingStatus($b['status'] ?? '');
 		// Skip cancelled/rejected; include confirmed and completed
-		if (in_array($status, ['cancelled','rejected'])) { continue; }
+		if ($status === 'cancelled') { continue; }
 		$driverId = $b['driverId'] ?? null; if (!$driverId) { continue; }
 		$fare = bookingFareAmount($b);
 		$commission = ($fare * 20) / 100; // 20% company cut
@@ -36,7 +31,7 @@ try {
 				'jobs' => []
 			];
 		}
-		if (in_array($status, ['completed','confirmed'])) {
+		if ($status === 'completed') {
 			$byDriver[$driverId]['total_fare'] += $fare;
 			$byDriver[$driverId]['total_commission'] += $commission;
 		}

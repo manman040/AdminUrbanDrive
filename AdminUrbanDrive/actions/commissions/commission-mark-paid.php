@@ -2,66 +2,126 @@
 session_start();
 require_once 'firebase-config.php';
 
-// Check if user is logged in
-if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
-    http_response_code(401);
-    echo json_encode(['success' => false, 'message' => 'Unauthorized']);
+requireAdminSession(true);
+header('Content-Type: application/json');
+
+// Records a commission payment the driver made outside ToyyibPay (cash at the
+// office, bank transfer, ...). The record is written to
+// commission_payment/{driverId} in exactly the shape the mobile app and the
+// ToyyibPay backend use -- bookingIds + amount + status 'paid' -- so the
+// driver's Total Earning screen shows those rides as paid immediately.
+//
+// The previous version wrote to commissions/{bookingId}, a path nothing else
+// reads, so admin-recorded payments never reached the app.
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    echo json_encode(['success' => false, 'message' => 'Method not allowed']);
     exit;
 }
 
-// Get JSON input
-$input = json_decode(file_get_contents('php://input'), true);
+$input = json_decode(file_get_contents('php://input'), true) ?: [];
 
-if (!$input || !isset($input['bookingId']) || !isset($input['commissionAmount'])) {
+$driverId = trim((string) ($input['driverId'] ?? ''));
+$bookingIds = [];
+if (isset($input['bookingIds']) && is_array($input['bookingIds'])) {
+    foreach ($input['bookingIds'] as $id) {
+        $id = trim((string) $id);
+        if ($id !== '' && !in_array($id, $bookingIds, true)) {
+            $bookingIds[] = $id;
+        }
+    }
+} elseif (!empty($input['bookingId'])) {
+    $bookingIds[] = trim((string) $input['bookingId']);
+}
+$method = trim((string) ($input['method'] ?? 'cash'));
+$note = trim((string) ($input['note'] ?? ''));
+$rate = isset($input['rate']) && is_numeric($input['rate']) ? (float) $input['rate'] : 20.0;
+
+if ($driverId === '') {
     http_response_code(400);
-    echo json_encode(['success' => false, 'message' => 'Missing required fields']);
+    echo json_encode(['success' => false, 'message' => 'driverId is required']);
     exit;
 }
-
-$bookingId = $input['bookingId'];
-$commissionAmount = floatval($input['commissionAmount']);
-$rate = intval($input['rate'] ?? 20); // Default 20% company cut
+if (empty($bookingIds)) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'message' => 'Select at least one completed ride']);
+    exit;
+}
 
 try {
-    // Get the booking to find driver name
-    $booking = getFirebaseData("bookings/{$bookingId}");
-    
-    if (!$booking) {
-        throw new Exception('Booking not found');
+    $bookings = getFirebaseData('bookings');
+    if (!is_array($bookings)) {
+        $bookings = [];
     }
-    
-    $driverId = $booking['driverId'] ?? 'unknown';
-    $driverName = $booking['driver_name'] ?? ($booking['driverName'] ?? $driverId);
-    $fare = bookingFareAmount($booking);
-    
-    // Create commission record
-    $commissionData = [
-        'booking_id' => $bookingId,
-        'driver_name' => $driverName,
-        'driver_id' => $driverId,
-        'fare_amount' => $fare,
-        'commission_rate' => $rate,
-        'commission_amount' => $commissionAmount,
+
+    $fareTotal = 0.0;
+    $accepted = [];
+    $skipped = [];
+    foreach ($bookingIds as $bookingId) {
+        $booking = $bookings[$bookingId] ?? null;
+        if (!is_array($booking)) {
+            $skipped[] = $bookingId . ': not found';
+            continue;
+        }
+        if (normalizeBookingStatus($booking['status'] ?? '') !== 'completed') {
+            $skipped[] = $bookingId . ': ride is not completed';
+            continue;
+        }
+        if (trim((string) ($booking['driverId'] ?? '')) !== $driverId) {
+            $skipped[] = $bookingId . ': belongs to another driver';
+            continue;
+        }
+        $fareTotal += bookingFareAmount($booking);
+        $accepted[] = $bookingId;
+    }
+
+    if (empty($accepted)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'No valid rides to mark paid. ' . implode('; ', $skipped)]);
+        exit;
+    }
+
+    $amount = round(($fareTotal * $rate) / 100, 2);
+    if (isset($input['amount']) && is_numeric($input['amount']) && (float) $input['amount'] > 0) {
+        $amount = round((float) $input['amount'], 2);
+    }
+
+    $now = time() * 1000;
+    $record = [
+        'bookingIds' => $accepted,
+        'amount' => $amount,
         'status' => 'paid',
-        'created_at' => time() * 1000, // Firebase timestamp format
-        'paid_at' => time() * 1000,
-        'paid_by' => $_SESSION['admin_username'] ?? 'admin'
+        'method' => $method !== '' ? $method : 'cash',
+        'note' => $note,
+        'reference' => 'ADMIN-' . strtoupper(substr($driverId, 0, 8)) . '-' . substr((string) $now, -6),
+        'createdAt' => $now,
+        'paid_at' => $now,
+        'paid_by' => $_SESSION['admin_username'] ?? 'admin',
+        'source' => 'admin',
     ];
-    
-    // Save to Firebase commissions table
-    $result = updateFirebaseData("commissions/{$bookingId}", $commissionData);
-    
-    if ($result) {
-        // ALSO update the driver's commission summary in driver_commissions
-        updateDriverCommission($driverId, $bookingId, $fare, $commissionAmount, 'paid');
-        
-        echo json_encode(['success' => true, 'message' => 'Commission marked as paid and driver summary updated']);
-    } else {
-        throw new Exception('Failed to update commission status');
+
+    $paymentId = pushFirebaseData('commission_payment/' . $driverId, $record);
+    if ($paymentId === null) {
+        throw new Exception('Failed to save payment: ' . firebaseLastError());
     }
-    
+
+    pushAppNotification(
+        $driverId,
+        true,
+        'Commission payment recorded',
+        'Urban Drive recorded RM ' . number_format($amount, 2) . ' for ' . count($accepted) . ' ride(s). Thank you!'
+    );
+
+    echo json_encode([
+        'success' => true,
+        'message' => 'Payment of RM ' . number_format($amount, 2) . ' recorded for ' . count($accepted) . ' ride(s)',
+        'paymentId' => $paymentId,
+        'amount' => $amount,
+        'bookingIds' => $accepted,
+        'skipped' => $skipped,
+    ]);
 } catch (Exception $e) {
     http_response_code(500);
     echo json_encode(['success' => false, 'message' => $e->getMessage()]);
 }
-?>

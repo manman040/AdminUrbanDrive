@@ -2,11 +2,7 @@
 session_start();
 require_once 'firebase-config.php';
 
-// Check if user is logged in
-if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
-	header('Location: index.php');
-	exit;
-}
+requireAdminSession();
 
 // Fetch Users and Drivers from Firebase with safe fallback
 try {
@@ -22,6 +18,26 @@ try {
 		}
 	} catch (Exception $e) {
 		$driverApprovalsData = [];
+	}
+
+	// Average star rating per driver from ratings/{driverId}/{bookingId} (the
+	// app never stores a rating on the driver record itself).
+	$driverRatingStats = [];
+	try {
+		$ratingsData = getFirebaseData('ratings');
+		if (is_array($ratingsData)) {
+			foreach ($ratingsData as $ratedDriverId => $driverRatings) {
+				if (!is_array($driverRatings)) continue;
+				$sum = 0.0; $count = 0;
+				foreach ($driverRatings as $entry) {
+					if (!is_array($entry) || !isset($entry['rating']) || !is_numeric($entry['rating'])) continue;
+					$sum += (float) $entry['rating']; $count++;
+				}
+				if ($count > 0) $driverRatingStats[$ratedDriverId] = ['average' => round($sum / $count, 1), 'count' => $count];
+			}
+		}
+	} catch (Exception $e) {
+		$driverRatingStats = [];
 	}
 
 	// Ensure data is array
@@ -40,6 +56,11 @@ try {
 				continue;
 			}
 			$user['id'] = $userId;
+			// Skip token-only stubs (the app writes users/{uid}/fcmToken for drivers too).
+			if (trim((string) ($user['name'] ?? '')) === '' && trim((string) ($user['email'] ?? '')) === '') {
+				continue;
+			}
+			$user['created_label'] = formatFirebaseDate($user);
 			$users[] = $user;
 		}
 	}
@@ -101,15 +122,13 @@ try {
 				$driver['capacity'] = $driver['passengerCapacity'] ?? $driver['passenger_capacity'] ?? '';
 			}
 			
-			// Rating: rating (check if it's a number or object)
-			if (isset($driver['rating'])) {
-				if (is_array($driver['rating'])) {
-					$driver['rating'] = $driver['rating']['average'] ?? $driver['rating']['value'] ?? $driver['rating']['total'] ?? '';
-				}
-			}
+			// Rating comes from ratings/{driverId}; the driver record has no rating field.
+			$driver['rating'] = isset($driverRatingStats[$driverId]) ? $driverRatingStats[$driverId]['average'] : '';
+			$driver['rating_count'] = isset($driverRatingStats[$driverId]) ? $driverRatingStats[$driverId]['count'] : 0;
+			$driver['created_label'] = formatFirebaseDate($driver);
 			
 			$driverStatus = strtolower($driver['status'] ?? 'pending');
-			if (in_array($driverStatus, ['approved', 'active'], true)) {
+			if (in_array($driverStatus, ['approved', 'active', 'disabled'], true)) {
 				$drivers[] = $driver;
 			}
 		}
@@ -406,6 +425,10 @@ try {
 				<i class="fas fa-tachometer-alt"></i>
 				Rides Management
 			</a>
+			<a href="rides-management.php" class="nav-item">
+			    <i class="fas fa-route"></i>
+			    All Rides
+			</a>
 			<a href="driver-requests.php" class="nav-item">
 				<i class="fas fa-user-plus"></i>
 				Driver Request
@@ -479,7 +502,7 @@ try {
 									<?php $status = strtolower($u['status'] ?? 'active'); ?>
 									<span class="badge <?php echo $status === 'active' ? 'badge-success' : 'badge-warning'; ?>"><?php echo ucfirst($status); ?></span>
 								</td>
-								<td><?php echo htmlspecialchars($u['created_at'] ?? ''); ?></td>
+								<td><?php echo htmlspecialchars($u['created_label'] ?? ''); ?></td>
 								<td>
 									<button class="action-btn view-btn" onclick="viewUser('<?php echo $u['id']; ?>')" title="View Details"><i class="fas fa-eye"></i></button>
 									<?php if (($u['status'] ?? 'active') === 'active'): ?>
@@ -555,8 +578,9 @@ try {
 									?>
 								</td>
 								<td>
-									<span class="badge badge-success">Active</span>
-								</td>
+										<?php $dStatus = strtolower($d['status'] ?? 'active'); if ($dStatus === 'approved') { $dStatus = 'active'; } ?>
+										<span class="badge <?php echo $dStatus === 'disabled' ? 'badge-warning' : 'badge-success'; ?>"><?php echo ucfirst(htmlspecialchars($dStatus)); ?></span>
+									</td>
 								<td>
 									<?php 
 									$rating = $d['rating'] ?? '';
@@ -572,6 +596,7 @@ try {
 											}
 										}
 										echo '<span style="margin-left: 4px; font-weight: 600; color: #1e293b;">' . number_format($ratingValue, 1) . '</span>';
+										echo ' <small style="color:#64748b;">(' . (int) ($d['rating_count'] ?? 0) . ')</small>';
 										echo '</span>';
 									} else {
 										echo '<span style="color: #94a3b8; font-style: italic;">N/A</span>';
@@ -580,6 +605,11 @@ try {
 								</td>
 								<td>
 									<button class="action-btn view-btn" onclick="viewDriver('<?php echo $d['id']; ?>')" title="View Details"><i class="fas fa-eye"></i></button>
+									<?php if (strtolower($d['status'] ?? 'active') === 'disabled'): ?>
+										<button class="action-btn enable-btn" onclick="toggleDriver('<?php echo $d['id']; ?>','active')" title="Enable Driver"><i class="fas fa-check"></i> Enable</button>
+									<?php else: ?>
+										<button class="action-btn disable-btn" onclick="toggleDriver('<?php echo $d['id']; ?>','disabled')" title="Disable Driver"><i class="fas fa-ban"></i> Disable</button>
+									<?php endif; ?>
 									<button class="action-btn delete-btn" onclick="deleteDriver('<?php echo $d['id']; ?>', '<?php echo htmlspecialchars(addslashes($d['name'] ?? 'Driver')); ?>')" title="Delete Driver"><i class="fas fa-trash"></i> Delete</button>
 								</td>
 							</tr>
@@ -813,7 +843,7 @@ try {
 				</div>
 				<div class="detail-row">
 					<label>Status:</label>
-					<span class="badge badge-success">${data.status || 'Active'}</span>
+					<span class="badge ${String(data.status || 'Active').toLowerCase() === 'disabled' ? 'badge-warning' : 'badge-success'}">${data.status || 'Active'}</span>
 				</div>
 				<div class="detail-row">
 					<label>Rating:</label>
@@ -869,6 +899,33 @@ try {
 		);
 	}
 
+
+	function toggleDriver(id, status) {
+		const enabling = status === 'active';
+		openConfirmModal(
+			enabling ? 'Enable Driver' : 'Disable Driver',
+			enabling
+				? 'Allow this driver to log in and take rides again?'
+				: 'The driver will be signed out of the app and cannot take rides until enabled again. Continue?',
+			() => {
+				fetch('update-driver-direct.php', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ driverId: id, status: status })
+				})
+				.then(response => response.json())
+				.then(data => {
+					if (data.success) {
+						showToast(data.message || 'Driver status updated', 'success');
+						setTimeout(() => location.reload(), 1000);
+					} else {
+						showToast(data.message || 'Error updating driver status', 'error');
+					}
+				})
+				.catch(() => showToast('An error occurred while updating driver status', 'error'));
+			}
+		);
+	}
 
 	// Generic confirmation modal
 	let confirmCallback = null;

@@ -2,38 +2,29 @@
 session_start();
 require_once 'firebase-config.php';
 
-// Simple authentication - in production, you should use Firebase Auth or proper authentication
-$admin_credentials = [
-    'admin' => 'CY2eaYfjZX9YBxqTO7md',
-    'admin@PerdaRide.com' => 'CY2eaYfjZX9YBxqTO7md'
-];
+// Admin login: Firebase Authentication email/password, and the account must be
+// listed under /admins/{uid} in the Realtime Database. There is no fallback
+// password any more -- see Docs/ADMIN_AUTH_SETUP.md to add an admin.
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $username = $_POST['username'] ?? '';
-    $password = $_POST['password'] ?? '';
-    
-    // Try Firebase authentication first
-    if (authenticateWithFirebase($username, $password)) {
-        $_SESSION['admin_logged_in'] = true;
-        $_SESSION['admin_username'] = $username;
-        $_SESSION['auth_method'] = 'firebase';
-        header('Location: dashboard.php');
-        exit;
-    } else {
-        // Fallback to local authentication
-        if (isset($admin_credentials[$username]) && $admin_credentials[$username] === $password) {
-            $_SESSION['admin_logged_in'] = true;
-            $_SESSION['admin_username'] = $username;
-            $_SESSION['auth_method'] = 'local';
-            header('Location: dashboard.php');
-            exit;
-        } else {
-            header('Location: index.php?error=invalid_credentials');
-            exit;
-        }
-    }
-} else {
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     header('Location: index.php');
     exit;
 }
-?>
+
+$email = trim($_POST['username'] ?? ($_POST['email'] ?? ''));
+$password = $_POST['password'] ?? '';
+
+if ($email === '' || $password === '') {
+    header('Location: index.php?error=invalid_credentials');
+    exit;
+}
+
+$result = authenticateAdmin($email, $password);
+
+if ($result === 'ok') {
+    header('Location: dashboard.php');
+    exit;
+}
+
+header('Location: index.php?error=' . rawurlencode($result));
+exit;
