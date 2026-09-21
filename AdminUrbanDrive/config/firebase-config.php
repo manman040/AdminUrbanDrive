@@ -196,7 +196,9 @@ function firebaseSignIn($email, $password) {
     );
 
     if (!firebaseResponseOk($response) || empty($response['body']['idToken'])) {
-        error_log('Firebase sign-in failed: ' . firebaseResponseError($response));
+        global $firebase_last_error;
+        $firebase_last_error = firebaseResponseError($response);
+        error_log('Firebase sign-in failed: ' . $firebase_last_error);
         return null;
     }
 
@@ -278,6 +280,14 @@ function authenticateAdmin($email, $password) {
 
     $tokens = firebaseSignIn($email, $password);
     if ($tokens === null) {
+        // Anything other than a credential mistake is a server-side problem the
+        // admin cannot fix by retyping the password -- say so on the login page.
+        $reason = firebaseLastError();
+        foreach (['API_KEY', 'OPERATION_NOT_ALLOWED', 'connection failed', 'HTTP 5', 'PROJECT'] as $marker) {
+            if (stripos($reason, $marker) !== false) {
+                return 'server_config';
+            }
+        }
         return 'invalid_credentials';
     }
 

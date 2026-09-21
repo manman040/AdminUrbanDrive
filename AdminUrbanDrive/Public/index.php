@@ -5,6 +5,7 @@ $loginErrors = [
     'not_admin' => 'This account is not on the admin list. Ask an existing admin to add it under /admins in the Firebase database.',
     'session_expired' => 'Your session expired. Please log in again.',
     'not_configured' => 'Firebase is not configured on the server.',
+    'server_config' => 'The server could not reach Firebase login. This is a configuration problem on the server (API key or sign-in provider), not your password. Check the Render logs.',
 ];
 $loginError = isset($_GET['error']) && isset($loginErrors[$_GET['error']]) ? $loginErrors[$_GET['error']] : '';
 ?>
@@ -332,7 +333,7 @@ $loginError = isset($_GET['error']) && isset($loginErrors[$_GET['error']]) ? $lo
                 <form id="loginForm" method="POST" action="auth.php">
                     <div class="form-group">
                         <label for="username">Email</label>
-                        <input type="email" id="username" name="username" placeholder="Enter your admin email" autocomplete="username" required>
+                        <input type="email" id="username" name="username" placeholder="Enter your admin email" autocomplete="off" required>
                     </div>
                     
                     <div class="form-group">
@@ -362,6 +363,10 @@ $loginError = isset($_GET['error']) && isset($loginErrors[$_GET['error']]) ? $lo
                 return;
             }
             
+            if (!username.includes('@')) {
+                showError('Enter the full admin email address (the old "admin" username no longer exists).');
+                return;
+            }
             // Submit form
             this.submit();
         });
