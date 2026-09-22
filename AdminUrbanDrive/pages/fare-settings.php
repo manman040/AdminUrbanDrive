@@ -11,6 +11,7 @@ $fareSettings = getFareSettings();
 $categoryLabels = fareCategoryLabels();
 $fieldLabels = fareFieldLabels();
 $history = getFareSettingsHistory(100);
+$history = ensureFareHistoryBaseline($fareSettings, $history);
 $lastChange = $history[0] ?? null;
 
 if (!function_exists('h')) {
@@ -193,6 +194,9 @@ foreach ($history as $entry) {
         .chip .delta.up { background: var(--red-soft); color: var(--red); }
         .chip .delta.down { background: var(--green-soft); color: var(--green); }
         .chip i { color: #cbd5e1; font-size: 11px; }
+        .baseline-note { font-size: 12px; color: var(--muted); margin-top: 7px; display: flex; gap: 6px; align-items: center; }
+        .baseline-note i { color: #94a3b8; }
+        .chip.plain .to { font-weight: 700; }
         .empty { padding: 42px 24px; text-align: center; color: var(--muted); font-size: 14px; }
         .empty i { font-size: 30px; color: #cbd5e1; display: block; margin-bottom: 10px; }
         .table-wrap { overflow-x: auto; }
@@ -358,6 +362,14 @@ foreach ($history as $entry) {
                                 <td><span class="cat-pill <?php echo $cat === 'categoryB' ? 'b' : ''; ?>"><?php echo h($lbl ? $lbl['letter'] : '?'); ?> &middot; <?php echo h($lbl ? $lbl['name'] : $cat); ?></span></td>
                                 <td class="who"><?php echo h($entry['changedBy'] ?? 'admin'); ?></td>
                                 <td>
+                                    <?php if (($entry['kind'] ?? '') === 'baseline'): ?>
+                                    <div class="chips">
+                                        <?php foreach ($fieldLabels as $field => $fieldLabel): $v = (float) ($entry['after'][$field] ?? 0); ?>
+                                        <span class="chip plain"><span class="lbl"><?php echo h($fieldLabel); ?></span><span class="to">RM <?php echo number_format($v, 2); ?></span></span>
+                                        <?php endforeach; ?>
+                                    </div>
+                                    <div class="baseline-note"><i class="fas fa-info-circle"></i> Values on record when the change log was introduced. Edits made before this date were not tracked by the old page.</div>
+                                    <?php else: ?>
                                     <div class="chips">
                                         <?php foreach ($entry['changes'] as $field => $change): if (!is_array($change)) continue; $from = (float) ($change['from'] ?? 0); $to = (float) ($change['to'] ?? 0); $delta = $to - $from; ?>
                                         <span class="chip">
@@ -369,6 +381,7 @@ foreach ($history as $entry) {
                                         </span>
                                         <?php endforeach; ?>
                                     </div>
+                                    <?php endif; ?>
                                 </td>
                             </tr>
                             <?php endforeach; ?>

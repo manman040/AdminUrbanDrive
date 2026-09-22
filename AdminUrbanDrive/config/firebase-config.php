@@ -26,6 +26,9 @@ $firebase_storage_url = 'https://firebasestorage.googleapis.com/v0/b/drive-ab344
 // Last error message from a Firebase request (for diagnostics pages)
 $firebase_last_error = '';
 
+// Dates on every admin page are shown in Malaysian time (the server runs in UTC).
+date_default_timezone_set('Asia/Kuala_Lumpur');
+
 function isFirebaseConfigured() {
     global $firebase_config, $firebase_database_url;
 
@@ -733,6 +736,54 @@ function saveFareSettingsWithHistory($category, $baseFare, $perKm, $bookingFee, 
         'changes' => $changes,
         'history' => $entry,
     ];
+}
+
+// When the change log was introduced, the prices already carried an updatedAt
+// from the old page but no history. Record those values once, per category,
+// as a "baseline" row so the log starts from the real last save. Edits made
+// before that cannot be reconstructed -- the old page never kept old values.
+function ensureFareHistoryBaseline(array $fareSettings, array $history) {
+    $seen = [];
+    foreach ($history as $entry) {
+        $seen[(string) ($entry['category'] ?? '')] = true;
+    }
+    $added = false;
+    foreach (fareCategoryLabels() as $category => $label) {
+        if (isset($seen[$category])) {
+            continue;
+        }
+        $s = $fareSettings[$category] ?? null;
+        if (!is_array($s) || empty($s['updatedAt'])) {
+            continue;
+        }
+        $entry = [
+            'kind' => 'baseline',
+            'category' => $category,
+            'changedAt' => (int) $s['updatedAt'],
+            'changedBy' => !empty($s['updatedBy']) ? (string) $s['updatedBy'] : 'admin (before change log)',
+            'after' => [
+                'baseFare' => round((float) ($s['baseFare'] ?? 0), 2),
+                'perKm' => round((float) ($s['perKm'] ?? 0), 2),
+                'bookingFee' => round((float) ($s['bookingFee'] ?? 0), 2),
+            ],
+            'note' => 'Values on record when the change log was introduced',
+            'recordedAt' => time() * 1000,
+        ];
+        $id = pushFirebaseData('fareSettingsHistory', $entry);
+        if ($id === null) {
+            continue;
+        }
+        $entry['id'] = $id;
+        $entry['changes'] = [];
+        $history[] = $entry;
+        $added = true;
+    }
+    if ($added) {
+        usort($history, function ($a, $b) {
+            return ($b['changedAt'] ?? 0) <=> ($a['changedAt'] ?? 0);
+        });
+    }
+    return $history;
 }
 
 // Newest first, at most $limit entries.
